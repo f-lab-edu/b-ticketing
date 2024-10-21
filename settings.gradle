@@ -1,0 +1,4 @@
+rootProject.name = 'bticketing'
+include 'app','app2'
+
+
