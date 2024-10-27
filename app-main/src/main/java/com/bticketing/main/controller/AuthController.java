@@ -13,6 +13,7 @@ public class AuthController {
     public String register(@RequestBody UserDto userDto) {
         return "회원가입 성공 " + userDto.getName();
     }
+
     //로그인 api
     @PostMapping("/login")
     public String login(@RequestBody UserDto userDto) {
