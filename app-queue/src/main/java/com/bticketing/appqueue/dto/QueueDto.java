@@ -1,6 +1,6 @@
 package com.bticketing.appqueue.dto;
 
-import lombok.AllArgsConstructor;
+
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 
