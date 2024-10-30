@@ -9,13 +9,16 @@ public class ReservationController {
 
     //예매완료 api
     @PostMapping("/complete")
-    public String completeReservation(@RequestBody ReservationDto reservationDto) {
-        return "예매 성공 ID: " + reservationDto.getReservationId();
+    public ReservationDto completeReservation(@RequestBody ReservationDto reservationDto) {
+        return reservationDto;
     }
 
-    //예매취소 api
+    // 예매 취소 API
     @PostMapping("/cancel")
-    public String cancelReservation(@RequestParam int reservationId) {
-        return "예매 ID " + reservationId + " 취소 완료";
+    public ReservationDto cancelReservation(@RequestParam int reservationId) {
+        // 취소 후 ID만 포함한 ReservationDto 반환
+        ReservationDto reservationDto = new ReservationDto();
+        reservationDto.setReservationId(reservationId);
+        return reservationDto;
     }
 }

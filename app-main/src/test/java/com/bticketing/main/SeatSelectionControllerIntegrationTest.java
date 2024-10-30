@@ -20,41 +20,54 @@ public class SeatSelectionControllerIntegrationTest {
     @Test
     public void testAutoAssignSeats() {
         // given
-        SeatSelectionDto requestDto = new SeatSelectionDto(1,2,3, null);
-        HttpEntity<SeatSelectionDto> request = new HttpEntity<>(requestDto);
+        SeatSelectionDto seatSelectionDto = new SeatSelectionDto();
+        seatSelectionDto.setSeatCount(3);
 
         // when
-        ResponseEntity<String> response = restTemplate.postForEntity("/seats/auto-assign", request, String.class);
+        ResponseEntity<SeatSelectionDto> response = restTemplate.postForEntity("/seats/auto-assign", seatSelectionDto, SeatSelectionDto.class);
 
         // then
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(response.getBody()).contains("자동 좌석 선택 완료: 3개 좌석 배정");
+        assertThat(response.getBody().getSeatCount()).isEqualTo(3);
     }
 
     @Test
     public void testSelectSeats() {
         // given
-        SeatSelectionDto requestDto = new SeatSelectionDto(0,0,0, new int[]{101, 102, 103});
-        HttpEntity<SeatSelectionDto> request = new HttpEntity<>(requestDto);
+        SeatSelectionDto seatSelectionDto = new SeatSelectionDto();
+        seatSelectionDto.setSeatIds(new int[]{101, 102, 103});
 
         // when
-        ResponseEntity<String> response = restTemplate.postForEntity("/seats/select", request, String.class);
+        ResponseEntity<SeatSelectionDto> response = restTemplate.postForEntity("/seats/select", seatSelectionDto, SeatSelectionDto.class);
 
         // then
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(response.getBody()).contains("수동 좌석 선택 완료: 좌석 ID [101, 102, 103]");
+        assertThat(response.getBody().getSeatIds()).containsExactly(101, 102, 103);
     }
 
     @Test
-    public void testCheckVIPAccess() {
+    public void testCheckVIPAccess_VIPUser() {
         // given
         String url = "/seats/vip-access?userType=VIP";
 
         // when
-        ResponseEntity<String> response = restTemplate.getForEntity(url, String.class);
+        ResponseEntity<SeatSelectionDto> response = restTemplate.getForEntity(url, SeatSelectionDto.class);
 
         // then
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(response.getBody()).isEqualTo("선예매 유저입니다.");
+        assertThat(response.getBody().isVipAccess()).isTrue();
+    }
+
+    @Test
+    public void testCheckVIPAccess_RegularUser() {
+        // given
+        String url = "/seats/vip-access?userType=REGULAR";
+
+        // when
+        ResponseEntity<SeatSelectionDto> response = restTemplate.getForEntity(url, SeatSelectionDto.class);
+
+        // then
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody().isVipAccess()).isFalse();
     }
 }

@@ -10,13 +10,13 @@ import org.springframework.web.bind.annotation.RestController;
 public class AuthController {
     //회원가입 api
     @PostMapping("/register")
-    public String register(@RequestBody UserDto userDto) {
-        return "회원가입 성공 " + userDto.getName();
+    public UserDto register(@RequestBody UserDto userDto) {
+        return userDto;
     }
 
     //로그인 api
     @PostMapping("/login")
-    public String login(@RequestBody UserDto userDto) {
-        return "로그인 성공 " + userDto.getEmail();
+    public UserDto login(@RequestBody UserDto userDto) {
+        return userDto;
     }
 }
