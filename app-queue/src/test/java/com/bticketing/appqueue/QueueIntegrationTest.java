@@ -11,6 +11,7 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.web.client.RestTemplate;
 
+import java.time.LocalDate;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -38,6 +39,30 @@ public class QueueIntegrationTest {
         redisTemplate.getConnectionFactory().getConnection().flushAll();
     }
 
+    // resetQueueScore() 메서드 테스트
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    public void testResetQueueScore() {
+        // 100명의 사용자 추가
+        for (int i = 1; i <= 100; i++) {
+            String userToken = "userToken" + i;
+            redisQueueService.addUserToQueue(userToken);
+        }
+
+        // resetQueueScore() 메서드 실행
+        redisQueueService.resetQueueScore();
+
+        // 일일 통계 기록 확인
+        String today = LocalDate.now().toString();
+        String recordedCount = (String) redisTemplate.opsForHash().get("daily_queue_stats", today);
+        assertThat(recordedCount).isEqualTo("100");
+
+        // active_queue가 초기화되었는지 확인
+        Long queueSize = redisTemplate.opsForZSet().size("active_queue");
+        assertThat(queueSize).isZero();
+    }
+
+    // VIP 사용자의 접근 테스트
     @Test
     @Timeout(value = 30, unit = TimeUnit.SECONDS)
     public void testGetSeatList_VIPUser() {
@@ -49,6 +74,7 @@ public class QueueIntegrationTest {
         assertThat(response).contains("VIP access granted to: " + vipToken);
     }
 
+    // 일반 사용자의 대기열 추가 테스트
     @Test
     @Timeout(value = 30, unit = TimeUnit.SECONDS)
     public void testGetSeatList_NonVIPUser() {
@@ -62,6 +88,7 @@ public class QueueIntegrationTest {
         assertThat(isInQueue).isTrue();
     }
 
+    // 비회원의 임시 토큰 발급 및 대기열 추가 테스트
     @Test
     @Timeout(value = 30, unit = TimeUnit.SECONDS)
     public void testGetSeatList_GuestUser() {
@@ -76,6 +103,8 @@ public class QueueIntegrationTest {
         assertThat(isInQueue).isTrue();
     }
 
+
+    // 일반 사용자의 자동 삭제 테스트
     @Test
     @Timeout(value = 30, unit = TimeUnit.SECONDS)
     public void testAutoRemovalOfRegularUser() {
@@ -91,6 +120,7 @@ public class QueueIntegrationTest {
         });
     }
 
+    // 100명 이상의 사용자가 대기열에 추가된 상태에서 상위 100명 상태 업데이트 테스트
     @Test
     @Timeout(value = 60, unit = TimeUnit.SECONDS)
     public void testStatusUpdate_For100PlusUsers() {

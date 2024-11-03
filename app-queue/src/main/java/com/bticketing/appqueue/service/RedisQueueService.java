@@ -4,8 +4,10 @@ import com.bticketing.appqueue.util.TokenUtil;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDate;
 import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -15,6 +17,7 @@ import java.util.concurrent.TimeUnit;
 public class RedisQueueService {
 
     private static final String QUEUE_KEY = "active_queue";
+    private static final String DAILY_STATS_KEY = "daily_queue_stats";
     private static final String VIP_KEY_PREFIX = "vip:";
     private static final long WAIT_TIME = 5000L; // 개별 대기 시간 (5초)
     private static final int MAX_ALLOWED_IN_QUEUE = 100; // 최대 100명씩 처리
@@ -26,6 +29,23 @@ public class RedisQueueService {
     @Autowired
     public RedisQueueService(RedisTemplate<String, Object> redisTemplate) {
         this.redisTemplate = redisTemplate;
+    }
+
+    // 자정에 실행되는 스케줄러: active_queue의 사용자 수 기록 후 초기화
+    @Scheduled(cron = "0 0 0 * * *")
+    public void resetQueueScore() {
+        ZSetOperations<String, Object> zSetOps = redisTemplate.opsForZSet();
+        Long totalUsersToday = zSetOps.size(QUEUE_KEY);
+
+        if (totalUsersToday != null) {
+            // 현재 날짜를 키로 일일 사용자 수 기록
+            LocalDate today = LocalDate.now();
+            redisTemplate.opsForHash().put(DAILY_STATS_KEY, today.toString(), totalUsersToday.toString());
+        }
+
+        // active_queue 초기화
+        redisTemplate.delete(QUEUE_KEY);
+        System.out.println("Queue scores reset at midnight, with today's user count recorded.");
     }
 
     // 임시 사용자 토큰 발급
