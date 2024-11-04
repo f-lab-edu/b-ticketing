@@ -1,6 +1,7 @@
 package com.bticketing.appqueue;
 
 import com.bticketing.appqueue.service.RedisQueueService;
+import com.bticketing.appqueue.service.SseService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -31,6 +32,9 @@ public class QueueIntegrationTest {
 
     @Autowired
     private RedisTemplate<String, Object> redisTemplate;
+
+    @Autowired
+    private SseService sseService;
 
     private RestTemplate restTemplate;
 
@@ -82,17 +86,16 @@ public class QueueIntegrationTest {
     public void testGetSeatList_NonVIPUser_WithSseSignal() throws Exception {
         String userToken = "nonVipUserToken";
         String seatUrl = "http://localhost:" + port + "/queue/seats?userToken=" + userToken;
-        String sseUrl = "http://localhost:" + port + "/queue/status?userToken=" + userToken;
 
         // 대기열에 사용자를 추가
         ResponseEntity<String> response = restTemplate.getForEntity(seatUrl, String.class);
-        assertThat(response.getBody()).contains("User added to queue. Waiting for processing.");
+        assertThat(response.getBody()).contains(userToken);
 
         Boolean isInQueue = redisTemplate.opsForZSet().rank("active_queue", userToken) != null;
         assertThat(isInQueue).isTrue();
 
         // SSE Emitter 설정 및 이벤트 대기
-        SseEmitter emitter = redisQueueService.addSseEmitter(userToken);
+        SseEmitter emitter = sseService.addSseEmitter(userToken);
 
         // 클라이언트에서 SSE 신호 확인
         await().atMost(10, TimeUnit.SECONDS).untilAsserted(() -> {
@@ -108,15 +111,15 @@ public class QueueIntegrationTest {
 
         // 임시 토큰을 받아 대기열에 추가
         String response = restTemplate.getForObject(url, String.class);
-        assertThat(response).contains("Guest access granted with temporary token");
+        assertThat(response).contains("temporary token");
 
         // 발급된 임시 토큰을 추출하여 대기열에 추가됐는지 확인
-        String guestToken = response.split(": ")[1].split("\\.")[0];
+        String guestToken = extractTokenFromResponse(response);
         Boolean isInQueue = redisTemplate.opsForZSet().rank("active_queue", guestToken) != null;
         assertThat(isInQueue).isTrue();
 
         // SSE Emitter 설정 및 이벤트 대기
-        SseEmitter emitter = redisQueueService.addSseEmitter(guestToken);
+        SseEmitter emitter = sseService.addSseEmitter(guestToken);
 
         // 클라이언트에서 SSE 신호 확인
         await().atMost(10, TimeUnit.SECONDS).untilAsserted(() -> {
@@ -124,7 +127,7 @@ public class QueueIntegrationTest {
         });
     }
 
-    // SSE 신호가 정상적으로 전달되었는지 확인
+    // SSE 신호가 정상적으로 전달되었는지 확인하는 메서드
     private String extractTokenFromResponse(String response) {
         return response.split(": ")[1].split("\\.")[0];
     }

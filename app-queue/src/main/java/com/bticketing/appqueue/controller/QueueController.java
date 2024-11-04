@@ -1,6 +1,7 @@
 package com.bticketing.appqueue.controller;
 
 import com.bticketing.appqueue.service.RedisQueueService;
+import com.bticketing.appqueue.service.SseService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -12,10 +13,12 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 public class QueueController {
 
     private final RedisQueueService queueService;
+    private final SseService sseService;
 
     @Autowired
-    public QueueController(RedisQueueService queueService) {
+    public QueueController(RedisQueueService queueService, SseService sseService) {
         this.queueService = queueService;
+        this.sseService = sseService;
     }
 
     // 좌석 목록 요청 (로그인/비회원 처리)
@@ -42,6 +45,6 @@ public class QueueController {
     // SSE 연결 설정
     @GetMapping(value = "/status", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter queueStatus(@RequestParam String userToken) {
-        return queueService.addSseEmitter(userToken);
+        return sseService.addSseEmitter(userToken);
     }
 }
