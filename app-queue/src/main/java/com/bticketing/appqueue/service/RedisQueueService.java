@@ -6,9 +6,12 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.time.LocalDate;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -26,9 +29,23 @@ public class RedisQueueService {
     private final RedisTemplate<String, Object> redisTemplate;
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(5);
 
+    private static final Map<String, SseEmitter> emitters = new ConcurrentHashMap<>();
+
     @Autowired
     public RedisQueueService(RedisTemplate<String, Object> redisTemplate) {
         this.redisTemplate = redisTemplate;
+    }
+
+    // SSE Emitter 추가 메서드
+    public SseEmitter addSseEmitter(String userToken) {
+        SseEmitter emitter = new SseEmitter();
+        emitters.put(userToken, emitter);
+
+        // SSE 연결이 종료되면 자동으로 제거
+        emitter.onCompletion(() -> emitters.remove(userToken));
+        emitter.onTimeout(() -> emitters.remove(userToken));
+
+        return emitter;
     }
 
     // 자정에 실행되는 스케줄러: active_queue의 사용자 수 기록 후 초기화
@@ -69,10 +86,20 @@ public class RedisQueueService {
             int index = 0;
             for (Object user : topUsers) {
                 final String userKey = "user_status:" + user;
-
                 scheduler.schedule(() -> {
                     redisTemplate.opsForHash().put(userKey, "canProceed", "true");
                     zSetOps.remove(QUEUE_KEY, user);
+
+                    // SSE 이벤트 전송
+                    SseEmitter emitter = emitters.get(user);
+                    if (emitter != null) {
+                        try {
+                            emitter.send(SseEmitter.event().name("queueStatus").data("Proceed to /seats/sections"));
+                            emitter.complete();
+                        } catch (Exception e) {
+                            emitters.remove(user);
+                        }
+                    }
                 }, index * INTERVAL_TIME, TimeUnit.MILLISECONDS);
 
                 index++;
