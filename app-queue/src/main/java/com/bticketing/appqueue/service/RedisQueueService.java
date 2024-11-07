@@ -48,9 +48,9 @@ public class RedisQueueService {
 
         try {
             redisTemplate.delete(RedisKeys.QUEUE_KEY);
-            logger.info("queue_score 데이터 삭제");
+            logger.info("active_queue 데이터 삭제");
         } catch (Exception e) {
-            logger.error("queue_score 데이터 삭제 실패.", e);
+            logger.error("active_queue 데이터 삭제 실패.", e);
         }
     }
 
