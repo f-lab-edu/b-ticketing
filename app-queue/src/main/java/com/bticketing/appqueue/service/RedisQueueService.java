@@ -33,7 +33,7 @@ public class RedisQueueService {
         this.redisTemplate = redisTemplate;
         this.sseService = sseService;
     }
-
+    // 자료구조 변경 검토
     // 자정에 실행되는 스케줄러: active_queue의 사용자 수 기록 후 초기화
     @Scheduled(cron = "0 0 0 * * *")
     public void resetQueueScore() {
