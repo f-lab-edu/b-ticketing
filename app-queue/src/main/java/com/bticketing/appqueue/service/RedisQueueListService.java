@@ -6,20 +6,19 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
-import java.util.Set;
+import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 @Service
-public class RedisQueueService {
+public class RedisQueueListService {
 
-    private static final Logger logger = LoggerFactory.getLogger(RedisQueueService.class);
+    private static final Logger logger = LoggerFactory.getLogger(RedisQueueListService.class);
     private static final long WAIT_TIME = 5000L; // 개별 대기 시간 (5초)
     private static final int MAX_ALLOWED_IN_QUEUE = 100; // 최대 100명씩 처리
     private static final long INTERVAL_TIME = 2000L; // 2초 간격
@@ -29,16 +28,15 @@ public class RedisQueueService {
     private final SseService sseService; // SSE 전송을 위한 SseService 주입
 
     @Autowired
-    public RedisQueueService(RedisTemplate<String, Object> redisTemplate, SseService sseService) {
+    public RedisQueueListService(RedisTemplate<String, Object> redisTemplate, SseService sseService) {
         this.redisTemplate = redisTemplate;
         this.sseService = sseService;
     }
-    // 자료구조 변경 검토
+
     // 자정에 실행되는 스케줄러: active_queue의 사용자 수 기록 후 초기화
     @Scheduled(cron = "0 0 0 * * *")
-    public void resetQueueScore() {
-        ZSetOperations<String, Object> zSetOps = redisTemplate.opsForZSet();
-        Long totalUsersToday = zSetOps.size(RedisKeys.ZSET_QUEUE_KEY);
+    public void resetQueue() {
+        Long totalUsersToday = redisTemplate.opsForList().size(RedisKeys.LIST_QUEUE_KEY);
 
         if (totalUsersToday != null) {
             LocalDate today = LocalDate.now();
@@ -47,7 +45,7 @@ public class RedisQueueService {
         }
 
         try {
-            redisTemplate.delete(RedisKeys.ZSET_QUEUE_KEY);
+            redisTemplate.delete(RedisKeys.LIST_QUEUE_KEY);
             logger.info("active_queue 데이터 삭제");
         } catch (Exception e) {
             logger.error("active_queue 데이터 삭제 실패.", e);
@@ -59,17 +57,15 @@ public class RedisQueueService {
         return TokenUtil.generateUserToken();
     }
 
+    // 사용자 대기열에 추가 (List 구조 사용)
     public void addUserToQueue(String userToken) {
-        ZSetOperations<String, Object> zSetOps = redisTemplate.opsForZSet();
-        zSetOps.add(RedisKeys.ZSET_QUEUE_KEY, userToken, System.currentTimeMillis());
-
+        redisTemplate.opsForList().leftPush(RedisKeys.LIST_QUEUE_KEY, userToken);
         scheduler.schedule(this::updateCanProceedStatus, WAIT_TIME, TimeUnit.MILLISECONDS);
     }
 
     // 대기열 상위 100명씩 2초 간격으로 canProceed 상태 업데이트
     public void updateCanProceedStatus() {
-        ZSetOperations<String, Object> zSetOps = redisTemplate.opsForZSet();
-        Set<Object> topUsers = zSetOps.range(RedisKeys.ZSET_QUEUE_KEY, 0, MAX_ALLOWED_IN_QUEUE - 1);
+        List<Object> topUsers = redisTemplate.opsForList().range(RedisKeys.LIST_QUEUE_KEY, -MAX_ALLOWED_IN_QUEUE, -1);
 
         if (topUsers != null) {
             int index = 0;
@@ -77,7 +73,7 @@ public class RedisQueueService {
                 final String userKey = RedisKeys.getUserStatusKey((String) user);
                 scheduler.schedule(() -> {
                     redisTemplate.opsForHash().put(userKey, "canProceed", "true");
-                    zSetOps.remove(RedisKeys.ZSET_QUEUE_KEY, user);
+                    redisTemplate.opsForList().remove(RedisKeys.LIST_QUEUE_KEY, 1, user);
 
                     // SSE 이벤트 전송을 SseService로 위임
                     sseService.sendEvent((String) user, "queueStatus", "Proceed to /seats/sections");
@@ -88,6 +84,7 @@ public class RedisQueueService {
         }
     }
 
+    // 사용자 VIP 여부 확인
     public boolean isUserVIP(String userId) {
         String vipKey = RedisKeys.getVIPKey(userId);
         return redisTemplate.hasKey(vipKey);

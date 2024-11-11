@@ -2,7 +2,8 @@ package com.bticketing.appqueue.util;
 
 public class RedisKeys {
     // 대기열 관련 키
-    public static final String QUEUE_KEY = "active_queue";
+    public static final String LIST_QUEUE_KEY = "active_queue_list";
+    public static final String ZSET_QUEUE_KEY = "active_queue_zset";
 
     // 일일 통계 저장 키
     public static final String DAILY_STATS_KEY = "daily_queue_stats";
