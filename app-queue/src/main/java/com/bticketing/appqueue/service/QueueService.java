@@ -1,100 +1,145 @@
 package com.bticketing.appqueue.service;
 
+import com.bticketing.appqueue.util.RedisUtil;
 import com.bticketing.appqueue.util.TokenUtil;
-import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.time.Duration;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Service
 public class QueueService {
 
+    private static final Logger logger = LoggerFactory.getLogger(QueueService.class);
+
     private static final String QUEUE_KEY = "userQueue";
     private static final String GROUP_KEY_PREFIX = "group-";
-    private static final String REDIRECT_COUNT_KEY_PREFIX = "redirectCount-";
     private static final String USER_READY_KEY_PREFIX = "userReady-";
-    private static final int MAX_QUEUE_SIZE = 500;
-    private static final int GROUP_SIZE = 200;
+    private static final String CURRENT_GROUP_KEY = "currentGroup";
 
-    private final RedisTemplate<String, Object> redisTemplate;
-    private int currentGroup = 1;
+    private static final int MAX_QUEUE_SIZE = 1000;
+    private static final int GROUP_SIZE = 120;
+    private final AtomicInteger cachedCurrentGroup = new AtomicInteger(1);
 
-    public QueueService(RedisTemplate<String, Object> redisTemplate) {
-        this.redisTemplate = redisTemplate;
+    private final RedisUtil redisUtil;
+
+    public QueueService(RedisUtil redisUtil) {
+        this.redisUtil = redisUtil;
     }
 
-    // 사용자 대기열 진입 처리
+    // 현재 그룹 조회
+    protected int getCurrentGroup() {
+        int currentGroup = cachedCurrentGroup.get();
+        Integer redisGroup = (Integer) redisUtil.getValue(CURRENT_GROUP_KEY);
+        if (redisGroup != null && redisGroup > currentGroup) {
+            cachedCurrentGroup.set(redisGroup);
+            return redisGroup;
+        }
+        return currentGroup;
+    }
+
+    // 현재 그룹 업데이트
+    protected void updateCurrentGroup(int newGroup) {
+        try {
+            redisUtil.setValue(CURRENT_GROUP_KEY, newGroup);
+            cachedCurrentGroup.set(newGroup);
+            logger.info("현재 그룹 번호가 {}로 업데이트 되었습니다.", newGroup);
+        } catch (Exception e) {
+            logger.error("현재 그룹 번호 업데이트 실패", e);
+        }
+    }
+
+    // 사용자 진입 처리
     public String handleUserEntry(String userToken) {
-        if (userToken == null || userToken.isEmpty()) {
+        if (userToken == null || userToken.isBlank()) {
             userToken = TokenUtil.generateUserToken();
         }
 
-        Long queueSize = redisTemplate.opsForList().size(QUEUE_KEY);
-
-        // 500명 미만이면 바로 리다이렉트
+        Long queueSize = redisUtil.incrementValue(QUEUE_KEY + "-size");
         if (queueSize != null && queueSize < MAX_QUEUE_SIZE) {
-            markUserAsReadyToRedirect(userToken);
+            // 사용자 리다이렉트 준비: 직접 Redis에 값을 설정
+            redisUtil.setValueWithTTL(USER_READY_KEY_PREFIX + userToken, true, Duration.ofMinutes(10));
             return "/seats/sections";
         }
 
-        // 현재 그룹 키 생성 및 그룹 관리
-        String groupKey = GROUP_KEY_PREFIX + currentGroup;
-        Long groupSize = redisTemplate.opsForList().size(groupKey);
-
-        // 그룹 사이즈가 200명에 도달하면 다음 그룹으로 전환
-        if (groupSize != null && groupSize >= GROUP_SIZE) {
-            currentGroup++;
-            groupKey = GROUP_KEY_PREFIX + currentGroup;
+        int currentGroup = getCurrentGroup();
+        if (!acquireLockWithSharding("lock:group", currentGroup, Duration.ofSeconds(5))) {
+            logger.warn("그룹 {}에 사용자 추가를 위한 락 획득에 실패했습니다.", currentGroup);
+            return "error";
         }
 
-        // 사용자 대기열 및 현재 그룹에 추가
-        redisTemplate.opsForList().rightPush(QUEUE_KEY, userToken);
-        redisTemplate.opsForList().rightPush(groupKey, userToken);
-
-        // 대기열 그룹 처리 메서드 호출
-        processQueueGroup();
-
-        return "addedToQueue";
-    }
-
-    // 그룹별 대기열 처리 메서드
-    public void processQueueGroup() {
-        String groupKey = GROUP_KEY_PREFIX + currentGroup;
-        String redirectCountKey = REDIRECT_COUNT_KEY_PREFIX + currentGroup;
-        Long groupSize = redisTemplate.opsForList().size(groupKey);
-
-        // 현재 그룹이 존재하고, 그룹 사이즈가 200명 이상일 경우 처리
-        if (groupSize != null && groupSize >= GROUP_SIZE) {
-            for (int i = 0; i < GROUP_SIZE; i++) {
-                String userToken = (String) redisTemplate.opsForList().leftPop(groupKey);
-                if (userToken != null) {
-                    markUserAsReadyToRedirect(userToken);
-
-                    // Atomic Counter 증가
-                    Long redirectCount = redisTemplate.opsForValue().increment(redirectCountKey);
-
-                    // 모든 사용자가 리다이렉트되면 그룹 키 삭제
-                    if (redirectCount != null && redirectCount >= GROUP_SIZE) {
-                        redisTemplate.delete(groupKey);
-                        redisTemplate.delete(redirectCountKey);
-                        System.out.println("Deleted group key and redirect counter: " + groupKey);
-                    }
-                }
+        try {
+            String groupKey = GROUP_KEY_PREFIX + currentGroup;
+            if (redisUtil.getListLength(groupKey) >= GROUP_SIZE) {
+                updateCurrentGroup(currentGroup + 1);
+                groupKey = GROUP_KEY_PREFIX + (currentGroup + 1);
             }
 
-            // 다음 그룹 처리
-            currentGroup++;
-            processQueueGroup();
+            redisUtil.rightPushToList(groupKey, userToken);
+
+            // 사용자 리다이렉트 준비: 직접 Redis에 값을 설정
+            redisUtil.setValueWithTTL(USER_READY_KEY_PREFIX + userToken, true, Duration.ofMinutes(10));
+            logger.info("사용자 {}가 {} 그룹에 추가되었습니다.", userToken, groupKey);
+        } finally {
+            redisUtil.releaseLock("lock:group-" + currentGroup);
+        }
+
+        return "addedToQueue?userToken=" + userToken;
+    }
+
+    // 대기열 그룹 처리
+    public void processQueueGroup() {
+        int currentGroup = getCurrentGroup();
+        String lockKey = "lock:processQueueGroup-" + currentGroup;
+
+        if (!acquireLockWithSharding(lockKey, currentGroup, Duration.ofSeconds(5))) {
+            logger.warn("그룹 {}의 대기열 처리를 위한 락 획득에 실패했습니다.", currentGroup);
+            return;
+        }
+
+        try {
+            String groupKey = GROUP_KEY_PREFIX + currentGroup;
+            List<String> userTokens = redisUtil.leftPopMultipleFromList(groupKey, GROUP_SIZE);
+            if (userTokens.isEmpty()) {
+                logger.warn("그룹 {}에서 사용자 토큰을 찾을 수 없습니다.", currentGroup);
+                return;
+            }
+
+            redisUtil.setMultipleValues(userTokens, true, Duration.ofMinutes(10));
+            updateCurrentGroup(currentGroup + 1);
+        } finally {
+            redisUtil.releaseLock(lockKey);
         }
     }
 
-    // 사용자 리다이렉트 상태 업데이트
-    public void markUserAsReadyToRedirect(String userToken) {
-        // Atomic Set: userToken:ready 키를 true로 설정
-        redisTemplate.opsForValue().set(USER_READY_KEY_PREFIX + userToken, true);
+    // Sharded Lock 획득 메서드
+    public boolean acquireLockWithSharding(String lockKeyPrefix, int groupId, Duration lockDuration) {
+        String lockKey = lockKeyPrefix + "-" + groupId;
+        int maxRetries = 5;
+        int baseDelay = 50;
+
+        for (int i = 0; i < maxRetries; i++) {
+            if (redisUtil.acquireLock(lockKey, lockDuration)) {
+                return true;
+            }
+            try {
+                int backoffDelay = baseDelay * i;
+                Thread.sleep(backoffDelay);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        logger.warn("그룹 {}에 대해 {}회 재시도 후 락 획득에 실패했습니다.", groupId, maxRetries);
+        return false;
     }
 
     // 사용자 리다이렉트 상태 확인
     public boolean isUserReadyToRedirect(String userToken) {
-        Boolean isReady = (Boolean) redisTemplate.opsForValue().get(USER_READY_KEY_PREFIX + userToken);
+        Boolean isReady = (Boolean) redisUtil.getValue(USER_READY_KEY_PREFIX + userToken);
         return Boolean.TRUE.equals(isReady);
     }
 }

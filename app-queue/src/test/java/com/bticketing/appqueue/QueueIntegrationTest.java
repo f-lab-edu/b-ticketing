@@ -50,7 +50,6 @@ class QueueIntegrationTest {
     void testPollingAPI_UserRedirected() {
         // Given: 리다이렉트 준비 완료
         String userToken = "redirectUser";
-        queueService.markUserAsReadyToRedirect(userToken);
 
         // When: Polling API 호출
         String statusUrl = UriComponentsBuilder.fromPath("/queue/status")
