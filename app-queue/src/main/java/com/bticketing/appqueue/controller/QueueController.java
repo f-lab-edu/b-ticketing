@@ -1,50 +1,39 @@
 package com.bticketing.appqueue.controller;
 
-import com.bticketing.appqueue.service.RedisQueueService;
-import com.bticketing.appqueue.service.SseService;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.MediaType;
+import com.bticketing.appqueue.service.QueueService;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
-import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/queue")
 public class QueueController {
 
-    private final RedisQueueService queueService;
-    private final SseService sseService;
+    private final QueueService queueService;
 
-    @Autowired
-    public QueueController(RedisQueueService queueService, SseService sseService) {
+    public QueueController(QueueService queueService) {
         this.queueService = queueService;
-        this.sseService = sseService;
     }
 
-    // 좌석 목록 요청 (로그인/비회원 처리)
-    @GetMapping("/seats")
-    public ResponseEntity<String> getSeatList(@RequestParam(required = false) String userToken) {
-        // 로그인된 사용자의 경우
-        if (userToken != null) {
-            // VIP 여부 확인
-            if (queueService.isUserVIP(userToken)) {
-                return ResponseEntity.ok("/seats/sections");
-            } else {
-                queueService.addUserToQueue(userToken);
-                return ResponseEntity.ok( userToken);
-            }
-        }
-        // 비회원의 경우 임시 토큰 발급 후 대기열 추가
-        else {
-            String guestToken = queueService.generateGuestToken();
-            queueService.addUserToQueue(guestToken);
-            return ResponseEntity.ok(guestToken );
+    // 사용자 대기열 진입 API
+    @GetMapping("/queue")
+    public ResponseEntity<String> enterQueue(@RequestParam(required = false) String userToken) {
+        try {
+            String response = queueService.handleUserEntry(userToken);
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body("Error entering queue: " + e.getMessage());
         }
     }
 
-    // SSE 연결 설정
-    @GetMapping(value = "/status", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter queueStatus(@RequestParam String userToken) {
-        return sseService.addSseEmitter(userToken);
+    // Polling API: 사용자 리다이렉트 여부 확인
+    @GetMapping("/queue/status")
+    public ResponseEntity<String> checkQueueStatus(@RequestParam String userToken) {
+        try {
+            boolean readyToRedirect = queueService.isUserReadyToRedirect(userToken);
+            return readyToRedirect ? ResponseEntity.ok("/seats/sections") : ResponseEntity.ok("inQueue");
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body("Error checking queue status: " + e.getMessage());
+        }
     }
 }
