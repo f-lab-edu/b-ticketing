@@ -16,3 +16,13 @@ spring:
     console:
       enabled: true
       path: /h2-console
+  data:
+    redis:
+      host: localhost
+      port: 6380
+      timeout: 6000
+      lettuce:
+        pool:
+          max-active: 10
+          max-idle: 8
+          min-idle: 2
