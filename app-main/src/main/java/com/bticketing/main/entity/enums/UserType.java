@@ -1,4 +1,4 @@
-package com.bticketing.main.enums;
+package com.bticketing.main.entity.enums;
 
 import lombok.Getter;
 

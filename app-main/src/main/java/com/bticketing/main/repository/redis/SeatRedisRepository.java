@@ -1,4 +1,4 @@
-package com.bticketing.main.repository;
+package com.bticketing.main.repository.redis;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -6,11 +6,11 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 @Repository
-public class RedisSeatRepository implements RedisRepository{
+public class SeatRedisRepository implements RedisRepository{
 
     private final RedisTemplate<String, Object> redisTemplate;
 
-    public RedisSeatRepository(RedisTemplate<String, Object> redisTemplate) {
+    public SeatRedisRepository(RedisTemplate<String, Object> redisTemplate) {
         this.redisTemplate = redisTemplate;
     }
 
@@ -52,4 +52,6 @@ public class RedisSeatRepository implements RedisRepository{
             releaseLock(lockKey); // 작업 후 락 해제
         }
     }
+
+
 }

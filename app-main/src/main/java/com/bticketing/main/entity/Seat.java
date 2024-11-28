@@ -2,6 +2,7 @@ package com.bticketing.main.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.springframework.data.redis.core.RedisHash;
 
 @Entity
 @Table(name = "seats")
@@ -21,4 +22,10 @@ public class Seat {
 
     @Column(nullable = false)
     private String status; // 예: AVAILABLE, RESERVED
+
+    public Seat(int scheduleId, int sectionId, String status) {
+        this.scheduleId = scheduleId;
+        this.sectionId = sectionId;
+        this.status = status;
+    }
 }
