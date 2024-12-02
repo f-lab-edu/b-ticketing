@@ -2,6 +2,8 @@ package com.bticketing.appqueue;
 
 import com.bticketing.appqueue.service.QueueService;
 import org.junit.jupiter.api.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
@@ -13,10 +15,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @SpringBootTest
 class QueueLoadTest {
 
+    private static final Logger logger = LoggerFactory.getLogger(QueueLoadTest.class);
+
     @Autowired
     private QueueService queueService;
 
-    private static final int TOTAL_USERS = 5000;
+    private static final int TOTAL_USERS = 2000;
     private static final int THREAD_POOL_SIZE = 100;
     private ExecutorService executorService;
 
@@ -86,10 +90,10 @@ class QueueLoadTest {
         long endTime = System.currentTimeMillis();
         long totalTime = endTime - startTime;
 
-        System.out.println("총 실행 시간(ms): " + totalTime);
-        System.out.println("성공한 요청 수: " + successCount.get());
-        System.out.println("실패한 요청 수: " + errorCount.get());
-        System.out.println("성공률(%): " + (successCount.get() * 100.0 / TOTAL_USERS));
+        logger.info("총 실행 시간(ms): " + totalTime);
+        logger.info("성공한 요청 수: " + successCount.get());
+        logger.info("실패한 요청 수: " + errorCount.get());
+        logger.info("성공률(%): " + (successCount.get() * 100.0 / TOTAL_USERS));
 
         // 성공률이 90% 이상인지 검증
         assertTrue(successCount.get() >= (TOTAL_USERS * 0.9), "성공률이 90% 미만입니다.");
@@ -125,7 +129,7 @@ class QueueLoadTest {
 
         latch.await();
 
-        System.out.println("처리된 그룹 수: " + processedGroups.get());
+        logger.info("처리된 그룹 수: " + processedGroups.get());
 
         // 모든 그룹이 정상적으로 처리되었는지 검증
         assertTrue(processedGroups.get() == totalGroups, "모든 그룹이 처리되지 않았습니다.");

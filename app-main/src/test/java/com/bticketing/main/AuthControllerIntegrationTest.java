@@ -1,7 +1,7 @@
 package com.bticketing.main;
 
 import com.bticketing.main.dto.UserDto;
-import com.bticketing.main.enums.UserType;
+import com.bticketing.main.entity.enums.UserType;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;

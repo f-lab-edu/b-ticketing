@@ -1,6 +1,6 @@
 package com.bticketing.appqueue.service;
 
-import com.bticketing.appqueue.util.RedisUtil;
+import com.bticketing.appqueue.repository.QueueRepository;
 import com.bticketing.appqueue.util.TokenUtil;
 import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
@@ -24,16 +24,16 @@ public class QueueService {
     private static final int GROUP_SIZE = 120;
     private final AtomicInteger cachedCurrentGroup = new AtomicInteger(1);
 
-    private final RedisUtil redisUtil;
+    private final QueueRepository queueRepository;
 
-    public QueueService(RedisUtil redisUtil) {
-        this.redisUtil = redisUtil;
+    public QueueService(QueueRepository queueRepository) {
+        this.queueRepository = queueRepository;
     }
 
     // 현재 그룹 조회
     protected int getCurrentGroup() {
         int currentGroup = cachedCurrentGroup.get();
-        Integer redisGroup = (Integer) redisUtil.getValue(CURRENT_GROUP_KEY);
+        Integer redisGroup = (Integer) queueRepository.getValue(CURRENT_GROUP_KEY);
         if (redisGroup != null && redisGroup > currentGroup) {
             cachedCurrentGroup.set(redisGroup);
             return redisGroup;
@@ -44,7 +44,7 @@ public class QueueService {
     // 현재 그룹 업데이트
     protected void updateCurrentGroup(int newGroup) {
         try {
-            redisUtil.setValue(CURRENT_GROUP_KEY, newGroup);
+            queueRepository.setValue(CURRENT_GROUP_KEY, newGroup);
             cachedCurrentGroup.set(newGroup);
             logger.info("현재 그룹 번호가 {}로 업데이트 되었습니다.", newGroup);
         } catch (Exception e) {
@@ -58,10 +58,9 @@ public class QueueService {
             userToken = TokenUtil.generateUserToken();
         }
 
-        Long queueSize = redisUtil.incrementValue(QUEUE_KEY + "-size");
+        Long queueSize = queueRepository.incrementValue(QUEUE_KEY + "-size");
         if (queueSize != null && queueSize < MAX_QUEUE_SIZE) {
-            // 사용자 리다이렉트 준비: 직접 Redis에 값을 설정
-            redisUtil.setValueWithTTL(USER_READY_KEY_PREFIX + userToken, true, Duration.ofMinutes(10));
+            queueRepository.setValueWithTTL(USER_READY_KEY_PREFIX + userToken, true, Duration.ofMinutes(10));
             return "/seats/sections";
         }
 
@@ -73,18 +72,16 @@ public class QueueService {
 
         try {
             String groupKey = GROUP_KEY_PREFIX + currentGroup;
-            if (redisUtil.getListLength(groupKey) >= GROUP_SIZE) {
+            if (queueRepository.getListLength(groupKey) >= GROUP_SIZE) {
                 updateCurrentGroup(currentGroup + 1);
                 groupKey = GROUP_KEY_PREFIX + (currentGroup + 1);
             }
 
-            redisUtil.rightPushToList(groupKey, userToken);
-
-            // 사용자 리다이렉트 준비: 직접 Redis에 값을 설정
-            redisUtil.setValueWithTTL(USER_READY_KEY_PREFIX + userToken, true, Duration.ofMinutes(10));
+            queueRepository.pushToList(groupKey, userToken);
+            queueRepository.setValueWithTTL(USER_READY_KEY_PREFIX + userToken, true, Duration.ofMinutes(10));
             logger.info("사용자 {}가 {} 그룹에 추가되었습니다.", userToken, groupKey);
         } finally {
-            redisUtil.releaseLock("lock:group-" + currentGroup);
+            queueRepository.releaseLock("lock:group-" + currentGroup);
         }
 
         return "addedToQueue?userToken=" + userToken;
@@ -102,16 +99,19 @@ public class QueueService {
 
         try {
             String groupKey = GROUP_KEY_PREFIX + currentGroup;
-            List<String> userTokens = redisUtil.leftPopMultipleFromList(groupKey, GROUP_SIZE);
+            List<String> userTokens = queueRepository.popMultipleFromList(groupKey, GROUP_SIZE);
             if (userTokens.isEmpty()) {
                 logger.warn("그룹 {}에서 사용자 토큰을 찾을 수 없습니다.", currentGroup);
                 return;
             }
 
-            redisUtil.setMultipleValues(userTokens, true, Duration.ofMinutes(10));
+            // 사용자 데이터를 Redis에 저장
+            for (String token : userTokens) {
+                queueRepository.setValueWithTTL(USER_READY_KEY_PREFIX + token, true, Duration.ofMinutes(10));
+            }
             updateCurrentGroup(currentGroup + 1);
         } finally {
-            redisUtil.releaseLock(lockKey);
+            queueRepository.releaseLock(lockKey);
         }
     }
 
@@ -122,12 +122,11 @@ public class QueueService {
         int baseDelay = 50;
 
         for (int i = 0; i < maxRetries; i++) {
-            if (redisUtil.acquireLock(lockKey, lockDuration)) {
+            if (queueRepository.acquireLock(lockKey, lockDuration)) {
                 return true;
             }
             try {
-                int backoffDelay = baseDelay * i;
-                Thread.sleep(backoffDelay);
+                Thread.sleep(baseDelay * i);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
@@ -139,7 +138,9 @@ public class QueueService {
 
     // 사용자 리다이렉트 상태 확인
     public boolean isUserReadyToRedirect(String userToken) {
-        Boolean isReady = (Boolean) redisUtil.getValue(USER_READY_KEY_PREFIX + userToken);
+        Boolean isReady = (Boolean) queueRepository.getValue(USER_READY_KEY_PREFIX + userToken);
         return Boolean.TRUE.equals(isReady);
     }
 }
+
+

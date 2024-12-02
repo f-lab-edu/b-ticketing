@@ -1,6 +1,6 @@
 package com.bticketing.main.dto;
 
-import com.bticketing.main.enums.UserType;
+import com.bticketing.main.entity.enums.UserType;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 
