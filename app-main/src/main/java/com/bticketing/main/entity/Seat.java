@@ -5,7 +5,7 @@ import lombok.*;
 import org.springframework.data.redis.core.RedisHash;
 
 @Entity
-@Table(name = "seats")
+@Table(name = "seat")
 @Data
 @NoArgsConstructor
 @AllArgsConstructor

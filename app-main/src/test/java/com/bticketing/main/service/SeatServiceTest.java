@@ -37,29 +37,34 @@ class SeatServiceTest {
 
     @Test
     public void testSelectSeat_Success() {
-        int seatId = 101;
         int scheduleId = 1;
+        int seatId = 101;
         String lockKey = "seat:lock:" + scheduleId + ":" + seatId;
         String seatKey = "seat:" + scheduleId + ":" + seatId;
 
-        // RedisRepository의 동작 모킹
-        when(redisRepository.getSeatStatus(seatKey)).thenReturn(null); // 좌석이 비어있는 상태
-        when(redisRepository.executeWithLock(eq(lockKey), eq(5L), any()))
+        // Mock 설정: 첫 번째 호출에서는 비어있는 좌석
+        when(redisRepository.getSeatStatus(seatKey))
+                .thenReturn(null) // 첫 번째 호출: 빈 좌석
+                .thenReturn(null); // 두 번째 호출: 락 이후에도 빈 좌석
+
+        // Mock executeWithLock: 락 동작 시 Supplier 실행
+        when(redisRepository.executeWithLock(eq(lockKey), eq(300L), any()))
                 .thenAnswer(invocation -> {
-                    Supplier<SeatDto> action = invocation.getArgument(2); // Supplier로 캐스팅
+                    Supplier<SeatDto> action = invocation.getArgument(2); // Supplier 가져오기
                     return action.get(); // Supplier 실행
                 });
 
-        // SeatService의 selectSeat 호출
+        // 서비스 호출
         SeatDto result = seatService.selectSeat(scheduleId, seatId);
 
-        // 결과 검증
+        // 검증
+        assertNotNull(result, "Result should not be null");
         assertEquals(seatId, result.getSeatId());
         assertEquals("RESERVED", result.getStatus());
 
-        // Redis 호출 검증
+        // Mock 호출 검증
         verify(redisRepository, times(2)).getSeatStatus(seatKey);
-        verify(redisRepository).setSeatStatus(eq(seatKey), eq("RESERVED"), eq(300L));
+        verify(redisRepository).setSeatStatus(seatKey, "RESERVED", 300L);
     }
 
     @Test
@@ -79,87 +84,98 @@ class SeatServiceTest {
 
     @Test
     void testAutoAssignSeats_Success() {
-        int scheduleId = 100;
+        int scheduleId = 1;
         int numSeats = 2;
 
-        List<SeatReservation> seatReservations = Arrays.asList(
-                new SeatReservation(1, new Seat(1, "A", 1), 100, "PENDING"),
-                new SeatReservation(2, new Seat(2, "A", 2), 100, "PENDING"),
-                new SeatReservation(3, new Seat(3, "A", 3), 100, "COMPLETED")
+        // 전체 좌석 데이터
+        List<Seat> allSeats = Arrays.asList(
+                new Seat(101, "A", 1),
+                new Seat(102, "A", 2),
+                new Seat(103, "A", 3)
         );
 
-        Map<String, String> reservedSeats = Map.of(
-                "seat:100:3", "RESERVED"
-        );
-
-        // Mock DB repository
+        // Mock DB behavior: 좌석 예약 정보 (예약된 좌석은 없음)
+        List<SeatReservation> seatReservations = allSeats.stream()
+                .map(seat -> new SeatReservation(seat.getSeatId(), seat, scheduleId, "AVAILABLE"))
+                .toList();
         when(seatReservationRepository.findByScheduleId(scheduleId)).thenReturn(seatReservations);
 
-        // Mock Redis repository
-        when(redisRepository.getAllReservedSeats(scheduleId)).thenReturn(reservedSeats);
+        // Mock Redis behavior: 예약된 좌석 없음
+        when(redisRepository.getAllReservedSeats(scheduleId)).thenReturn(Collections.emptyMap());
 
         // Act
         List<SeatDto> result = seatService.autoAssignSeats(scheduleId, numSeats);
 
         // Assert
-        assertEquals(2, result.size());
+        assertNotNull(result);
+        assertEquals(numSeats, result.size());
+        assertEquals(101, result.get(0).getSeatId());
         assertEquals("RESERVED", result.get(0).getStatus());
+        assertEquals(102, result.get(1).getSeatId());
         assertEquals("RESERVED", result.get(1).getStatus());
-        verify(redisRepository, times(2)).setSeatStatus(anyString(), eq("RESERVED"), eq(300L));
+
+        // Redis 업데이트 검증
+        verify(redisRepository).setSeatStatus("seat:1:101", "RESERVED", 300L);
+        verify(redisRepository).setSeatStatus("seat:1:102", "RESERVED", 300L);
     }
 
     @Test
     void testAutoAssignSeats_Failure() {
-        int scheduleId = 100;
-        int numSeats = 4;
+        int scheduleId = 1;
+        int numSeats = 3;
 
-        List<SeatReservation> seatReservations = Arrays.asList(
-                new SeatReservation(1, new Seat(1, "A", 1), 100, "PENDING"),
-                new SeatReservation(2, new Seat(2, "A", 2), 100, "PENDING")
-        );
+        // Mock DB behavior: No available seats
+        when(seatReservationRepository.findByScheduleId(scheduleId)).thenReturn(Collections.emptyList());
 
-        Map<String, String> reservedSeats = Map.of(
-                "seat:100:1", "RESERVED",
-                "seat:100:2", "RESERVED"
-        );
-
-        // Mock DB repository
-        when(seatReservationRepository.findByScheduleId(scheduleId)).thenReturn(seatReservations);
-
-        // Mock Redis repository
-        when(redisRepository.getAllReservedSeats(scheduleId)).thenReturn(reservedSeats);
+        // Mock Redis behavior: No available seats
+        when(redisRepository.getAllReservedSeats(scheduleId)).thenReturn(Collections.emptyMap());
 
         // Act & Assert
-        RuntimeException exception = assertThrows(RuntimeException.class, () -> seatService.autoAssignSeats(scheduleId, numSeats));
+        RuntimeException exception = assertThrows(RuntimeException.class,
+                () -> seatService.autoAssignSeats(scheduleId, numSeats));
         assertEquals("요청한 좌석 수를 자동 배정할 수 없습니다.", exception.getMessage());
+
         verify(redisRepository, never()).setSeatStatus(anyString(), anyString(), anyLong());
     }
 
+
     @Test
     void testGetSeatsStatus() {
-        int scheduleId = 100;
+        int scheduleId = 1;
 
-        List<SeatReservation> completedReservations = Arrays.asList(
-                new SeatReservation(1, new Seat(1, "A", 1), 100, "COMPLETED"),
-                new SeatReservation(2, new Seat(2, "A", 2), 100, "COMPLETED")
+        // Mock Redis data
+        Map<String, String> redisData = Map.of(
+                "seat:1:101", "RESERVED",
+                "seat:1:102", "RESERVED"
         );
+        when(redisRepository.getAllReservedSeats(scheduleId)).thenReturn(redisData);
 
-        Map<String, String> reservedSeats = Map.of(
-                "seat:100:3", "RESERVED"
+        // Mock DB data
+        List<SeatReservation> completedSeats = Arrays.asList(
+                new SeatReservation(1, new Seat(103, "A", 3), scheduleId, "COMPLETED"),
+                new SeatReservation(2, new Seat(104, "A", 4), scheduleId, "COMPLETED")
         );
-
-        // Mock DB and Redis repository
         when(seatReservationRepository.findByScheduleIdAndStatus(scheduleId, "COMPLETED"))
-                .thenReturn(completedReservations);
-        when(redisRepository.getAllReservedSeats(scheduleId)).thenReturn(reservedSeats);
+                .thenReturn(completedSeats);
 
         // Act
         List<SeatDto> result = seatService.getSeatsStatus(scheduleId);
 
         // Assert
-        assertEquals(3, result.size());
-        assertTrue(result.stream().anyMatch(seat -> seat.getSeatId() == 1 && "COMPLETED".equals(seat.getStatus())));
-        assertTrue(result.stream().anyMatch(seat -> seat.getSeatId() == 2 && "COMPLETED".equals(seat.getStatus())));
-        assertTrue(result.stream().anyMatch(seat -> seat.getSeatId() == 3 && "RESERVED".equals(seat.getStatus())));
+        assertNotNull(result, "Result should not be null");
+        assertEquals(4, result.size(), "Result should contain 4 seats");
+
+        assertTrue(result.stream().anyMatch(seat -> seat.getSeatId() == 101 && "RESERVED".equals(seat.getStatus())),
+                "Seat 101 should be RESERVED");
+        assertTrue(result.stream().anyMatch(seat -> seat.getSeatId() == 102 && "RESERVED".equals(seat.getStatus())),
+                "Seat 102 should be RESERVED");
+        assertTrue(result.stream().anyMatch(seat -> seat.getSeatId() == 103 && "COMPLETED".equals(seat.getStatus())),
+                "Seat 103 should be COMPLETED");
+        assertTrue(result.stream().anyMatch(seat -> seat.getSeatId() == 104 && "COMPLETED".equals(seat.getStatus())),
+                "Seat 104 should be COMPLETED");
+
+        // Verify Redis and DB methods were called
+        verify(redisRepository).getAllReservedSeats(scheduleId);
+        verify(seatReservationRepository).findByScheduleIdAndStatus(scheduleId, "COMPLETED");
     }
 }
