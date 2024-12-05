@@ -6,7 +6,7 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
   jpa:
     hibernate:
-      ddl-auto: none
+      ddl-auto: update
     properties:
       hibernate:
         dialect: org.hibernate.dialect.MySQLDialect
@@ -16,7 +16,7 @@ spring:
   data:
     redis:
       host: localhost
-      port: 6380
+      port: 6379
       timeout: 6000
       lettuce:
         pool:

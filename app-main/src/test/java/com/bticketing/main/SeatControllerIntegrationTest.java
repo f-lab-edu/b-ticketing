@@ -39,6 +39,8 @@ public class SeatControllerIntegrationTest {
         initializeRedis();
     }
 
+
+
     private void initializeDatabase() {
         // DB 데이터 초기화 및 기본 데이터 세팅
         jdbcTemplate.execute("DELETE FROM seat_reservation");
