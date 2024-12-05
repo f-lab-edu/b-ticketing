@@ -1,0 +1,33 @@
+version: '3.9'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: bticketing
+      MYSQL_USER: user
+      MYSQL_PASSWORD: MyPassword123!
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+  redis-main:
+    image: redis:6.0
+    container_name: redis-main
+    restart: always
+    ports:
+      - "6380:6379" # 내부 Redis 포트를 6380에 매핑
+
+  redis-queue:
+    image: redis:6.0
+    container_name: redis-queue
+    restart: always
+    ports:
+      - "6379:6379" # 기본 포트 6379 사용
+
+volumes:
+  mysql-data:
