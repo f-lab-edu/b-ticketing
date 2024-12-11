@@ -5,27 +5,20 @@ import lombok.*;
 import org.springframework.data.redis.core.RedisHash;
 
 @Entity
-@Table(name = "seats")
+@Table(name = "seat")
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
 public class Seat {
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private int seatId;
 
     @Column(nullable = false)
-    private int scheduleId;
+    private String SeatRow; // A, B, C 등 좌석 열
 
     @Column(nullable = false)
-    private int sectionId;
+    private int SeatNumber; // 열 내 좌석 번호 (1, 2, 3...)
 
-    @Column(nullable = false)
-    private String status; // 예: AVAILABLE, RESERVED
-
-    public Seat(int scheduleId, int sectionId, String status) {
-        this.scheduleId = scheduleId;
-        this.sectionId = sectionId;
-        this.status = status;
-    }
 }
