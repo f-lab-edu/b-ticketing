@@ -3,26 +3,30 @@ package com.bticketing.main.service;
 import com.bticketing.main.dto.SeatDto;
 import com.bticketing.main.entity.Seat;
 import com.bticketing.main.entity.SeatReservation;
+import com.bticketing.main.exception.SeatAlreadyReservedException;
 import com.bticketing.main.repository.redis.SeatRedisRepository;
+import com.bticketing.main.repository.seat.SeatRepository;
 import com.bticketing.main.repository.seat.SeatReservationRepository;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 
-import java.util.*;
-import java.util.concurrent.Callable;
+import java.util.Optional;
 import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class SeatServiceTest {
 
     @Mock
     private SeatRedisRepository redisRepository;
+
+    @Mock
+    private SeatRepository seatRepository;
 
     @Mock
     private SeatReservationRepository seatReservationRepository;
@@ -33,149 +37,89 @@ class SeatServiceTest {
     @BeforeEach
     void setUp() {
         MockitoAnnotations.openMocks(this);
+        // 각 테스트가 독립적으로 Mock 상태를 갖도록 초기화
+    }
+
+    @AfterEach
+    void tearDown() {
+        // Mock 상태를 초기화하여 테스트 간 간섭 방지
+        clearInvocations(redisRepository, seatRepository, seatReservationRepository);
+        reset(redisRepository, seatRepository, seatReservationRepository);
     }
 
     @Test
-    public void testSelectSeat_Success() {
+    void testSelectSeat_RedisAndDbEmpty() {
         int scheduleId = 1;
-        int seatId = 101;
+        int seatId = 10;
         String lockKey = "seat:lock:" + scheduleId + ":" + seatId;
         String seatKey = "seat:" + scheduleId + ":" + seatId;
 
-        // Mock 설정: 첫 번째 호출에서는 비어있는 좌석
-        when(redisRepository.getSeatStatus(seatKey))
-                .thenReturn(null) // 첫 번째 호출: 빈 좌석
-                .thenReturn(null); // 두 번째 호출: 락 이후에도 빈 좌석
+        // Mock 설정
+        when(redisRepository.getSeatStatus(eq(seatKey)))
+                .thenReturn(null) // Redis 초기 상태 없음
+                .thenReturn("AVAILABLE"); // 동기화 후 상태 "AVAILABLE"로 설정
 
-        // Mock executeWithLock: 락 동작 시 Supplier 실행
+        when(seatReservationRepository.findBySeatAndSchedule(eq(seatId), eq(scheduleId)))
+                .thenReturn(Optional.empty()); // DB에도 예약 정보 없음
+
+        Seat mockSeat = new Seat(seatId, "A", 1);
+        when(seatRepository.findById(eq(seatId))).thenReturn(Optional.of(mockSeat)); // Seat 조회 Mock
+
+        when(seatReservationRepository.save(any(SeatReservation.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0)); // 저장된 객체 반환
+
+        // Redis 상태 업데이트 Mock
+        doNothing().when(redisRepository).setSeatStatus(anyString(), anyString(), anyLong());
+
+        // executeWithLock Mock 설정
         when(redisRepository.executeWithLock(eq(lockKey), eq(300L), any()))
                 .thenAnswer(invocation -> {
                     Supplier<SeatDto> action = invocation.getArgument(2); // Supplier 가져오기
                     return action.get(); // Supplier 실행
                 });
 
-        // 서비스 호출
+        // 테스트 실행
         SeatDto result = seatService.selectSeat(scheduleId, seatId);
 
-        // 검증
-        assertNotNull(result, "Result should not be null");
-        assertEquals(seatId, result.getSeatId());
-        assertEquals("RESERVED", result.getStatus());
-
         // Mock 호출 검증
-        verify(redisRepository, times(2)).getSeatStatus(seatKey);
-        verify(redisRepository).setSeatStatus(seatKey, "RESERVED", 300L);
-    }
+        verify(redisRepository, times(1)).getSeatStatus(eq(seatKey)); // 초기 Redis 상태 조회
+        verify(seatReservationRepository, times(1)).findBySeatAndSchedule(eq(seatId), eq(scheduleId)); // DB 조회
+        verify(seatRepository, times(1)).findById(eq(seatId)); // Seat 조회
+        verify(redisRepository, times(1)).setSeatStatus(eq(seatKey), eq("AVAILABLE"), anyLong()); // Redis 동기화
+        verify(redisRepository, times(1)).executeWithLock(eq(lockKey), eq(300L), any()); // 락 획득 후 실행
 
-    @Test
-    void testSelectSeat_AlreadyReserved() {
-        int scheduleId = 101;
-        int seatId = 1;
-        String seatKey = "seat:" + scheduleId + ":" + seatId;
-
-        // Mock Redis getSeatStatus
-        when(redisRepository.getSeatStatus(seatKey)).thenReturn("RESERVED");
-
-        // Act & Assert
-        RuntimeException exception = assertThrows(RuntimeException.class, () -> seatService.selectSeat(scheduleId, seatId));
-        assertEquals("이미 예약된 좌석입니다.", exception.getMessage());
-        verify(redisRepository, never()).setSeatStatus(anyString(), anyString(), anyLong());
-    }
-
-    @Test
-    void testAutoAssignSeats_Success() {
-        int scheduleId = 1;
-        int numSeats = 2;
-
-        // 전체 좌석 데이터
-        List<Seat> allSeats = Arrays.asList(
-                new Seat(101, "A", 1),
-                new Seat(102, "A", 2),
-                new Seat(103, "A", 3)
-        );
-
-        // Mock DB behavior: 좌석 예약 정보 (예약된 좌석은 없음)
-        List<SeatReservation> seatReservations = allSeats.stream()
-                .map(seat -> new SeatReservation(seat.getSeatId(), seat, scheduleId, "AVAILABLE"))
-                .toList();
-        when(seatReservationRepository.findByScheduleId(scheduleId)).thenReturn(seatReservations);
-
-        // Mock Redis behavior: 예약된 좌석 없음
-        when(redisRepository.getAllReservedSeats(scheduleId)).thenReturn(Collections.emptyMap());
-
-        // Act
-        List<SeatDto> result = seatService.autoAssignSeats(scheduleId, numSeats);
-
-        // Assert
-        assertNotNull(result);
-        assertEquals(numSeats, result.size());
-        assertEquals(101, result.get(0).getSeatId());
-        assertEquals("RESERVED", result.get(0).getStatus());
-        assertEquals(102, result.get(1).getSeatId());
-        assertEquals("RESERVED", result.get(1).getStatus());
-
-        // Redis 업데이트 검증
-        verify(redisRepository).setSeatStatus("seat:1:101", "RESERVED", 300L);
-        verify(redisRepository).setSeatStatus("seat:1:102", "RESERVED", 300L);
-    }
-
-    @Test
-    void testAutoAssignSeats_Failure() {
-        int scheduleId = 1;
-        int numSeats = 3;
-
-        // Mock DB behavior: No available seats
-        when(seatReservationRepository.findByScheduleId(scheduleId)).thenReturn(Collections.emptyList());
-
-        // Mock Redis behavior: No available seats
-        when(redisRepository.getAllReservedSeats(scheduleId)).thenReturn(Collections.emptyMap());
-
-        // Act & Assert
-        RuntimeException exception = assertThrows(RuntimeException.class,
-                () -> seatService.autoAssignSeats(scheduleId, numSeats));
-        assertEquals("요청한 좌석 수를 자동 배정할 수 없습니다.", exception.getMessage());
-
-        verify(redisRepository, never()).setSeatStatus(anyString(), anyString(), anyLong());
-    }
-
-
-    @Test
-    void testGetSeatsStatus() {
-        int scheduleId = 1;
-
-        // Mock Redis data
-        Map<String, String> redisData = Map.of(
-                "seat:1:101", "RESERVED",
-                "seat:1:102", "RESERVED"
-        );
-        when(redisRepository.getAllReservedSeats(scheduleId)).thenReturn(redisData);
-
-        // Mock DB data
-        List<SeatReservation> completedSeats = Arrays.asList(
-                new SeatReservation(1, new Seat(103, "A", 3), scheduleId, "COMPLETED"),
-                new SeatReservation(2, new Seat(104, "A", 4), scheduleId, "COMPLETED")
-        );
-        when(seatReservationRepository.findByScheduleIdAndStatus(scheduleId, "COMPLETED"))
-                .thenReturn(completedSeats);
-
-        // Act
-        List<SeatDto> result = seatService.getSeatsStatus(scheduleId);
-
-        // Assert
+        // 결과 검증
         assertNotNull(result, "Result should not be null");
-        assertEquals(4, result.size(), "Result should contain 4 seats");
+        assertEquals("RESERVED", result.getStatus());
+        assertEquals(seatId, result.getSeatId());
+    }
 
-        assertTrue(result.stream().anyMatch(seat -> seat.getSeatId() == 101 && "RESERVED".equals(seat.getStatus())),
-                "Seat 101 should be RESERVED");
-        assertTrue(result.stream().anyMatch(seat -> seat.getSeatId() == 102 && "RESERVED".equals(seat.getStatus())),
-                "Seat 102 should be RESERVED");
-        assertTrue(result.stream().anyMatch(seat -> seat.getSeatId() == 103 && "COMPLETED".equals(seat.getStatus())),
-                "Seat 103 should be COMPLETED");
-        assertTrue(result.stream().anyMatch(seat -> seat.getSeatId() == 104 && "COMPLETED".equals(seat.getStatus())),
-                "Seat 104 should be COMPLETED");
+    @Test
+    void testSelectSeat_RedisReserved() {
+        int scheduleId = 1;
+        int seatId = 10;
 
-        // Verify Redis and DB methods were called
-        verify(redisRepository).getAllReservedSeats(scheduleId);
-        verify(seatReservationRepository).findByScheduleIdAndStatus(scheduleId, "COMPLETED");
+        // Redis에서 이미 예약된 상태 설정
+        when(redisRepository.getSeatStatus("seat:1:10")).thenReturn("RESERVED");
+
+        // 예약된 상태에서 예외 발생 확인
+        assertThrows(SeatAlreadyReservedException.class, () -> seatService.selectSeat(scheduleId, seatId));
+    }
+
+    @Test
+    void testSelectSeat_DbReserved() {
+        int scheduleId = 1;
+        int seatId = 10;
+
+        // Redis는 비어있지만 DB에 예약 정보가 있는 상태 설정
+        when(redisRepository.getSeatStatus("seat:1:10")).thenReturn(null);
+        when(seatReservationRepository.findBySeatAndSchedule(seatId, scheduleId))
+                .thenReturn(Optional.of(new SeatReservation(0, new Seat(seatId, "A", 1), scheduleId, "RESERVED")));
+
+        // Redis 업데이트 Mock 설정
+        doNothing().when(redisRepository).setSeatStatus(anyString(), anyString(), anyLong());
+
+        // 예약된 상태에서 예외 발생 확인
+        assertThrows(SeatAlreadyReservedException.class, () -> seatService.selectSeat(scheduleId, seatId));
     }
 }

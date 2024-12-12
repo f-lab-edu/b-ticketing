@@ -21,4 +21,5 @@ public class Seat {
     @Column(nullable = false)
     private int SeatNumber; // 열 내 좌석 번호 (1, 2, 3...)
 
+
 }
