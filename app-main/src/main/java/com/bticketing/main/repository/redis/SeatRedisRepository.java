@@ -1,4 +1,7 @@
 package com.bticketing.main.repository.redis;
+import com.bticketing.main.service.SeatService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -11,11 +14,11 @@ import java.util.stream.Collectors;
 public class SeatRedisRepository {
 
     private final RedisTemplate<String, Object> redisTemplate;
+    private static final Logger logger = LoggerFactory.getLogger(SeatService.class);
 
     public SeatRedisRepository(RedisTemplate<String, Object> redisTemplate) {
         this.redisTemplate = redisTemplate;
     }
-
 
     public boolean acquireLock(String key, String value, long ttlInSeconds) {
         // Redis의 SETNX 명령과 EXPIRE를 결합한 동작을 수행
@@ -43,15 +46,24 @@ public class SeatRedisRepository {
 
 
     public <T> T executeWithLock(String lockKey, long ttlInSeconds, Supplier<T> action) {
+        System.out.println("[TEST] Lock 요청: lockKey=" + lockKey + ", ttl=" + ttlInSeconds);
         boolean lockAcquired = acquireLock(lockKey, "LOCKED", ttlInSeconds);
         if (!lockAcquired) {
+            System.out.println("[TEST] Lock 획득 실패: lockKey=" + lockKey);
             throw new RuntimeException("다른 작업이 진행 중입니다. 잠시 후 다시 시도해주세요.");
         }
 
+        System.out.println("[TEST] Lock 획득 성공: lockKey=" + lockKey);
         try {
-            return action.get(); // 람다로 전달받은 작업 실행
+            T result = action.get(); // 람다로 전달받은 작업 실행
+            System.out.println("[TEST] 작업 실행 완료: lockKey=" + lockKey + ", result=" + result);
+            return result;
+        } catch (Exception e) {
+            System.out.println("[TEST] 작업 실행 중 예외 발생: lockKey=" + lockKey + ", error=" + e.getMessage());
+            throw e;
         } finally {
             releaseLock(lockKey); // 작업 후 락 해제
+            System.out.println("[TEST] Lock 해제: lockKey=" + lockKey);
         }
     }
 
@@ -72,5 +84,25 @@ public class SeatRedisRepository {
         return result;
     }
 
+    public List<Integer> getAvailableSeatIds(int scheduleId) {
+        String keyPattern = "seat:" + scheduleId + ":*";
+        Set<String> keys = redisTemplate.keys(keyPattern); // 패턴으로 Redis에서 키 조회
+        List<Integer> availableSeats = new ArrayList<>();
+
+        if (keys != null) {
+            for (String key : keys) {
+                String status = (String) redisTemplate.opsForValue().get(key); // 상태 조회
+                if ("AVAILABLE".equals(status)) {
+                    String seatId = key.split(":")[2]; // 키에서 seatId 추출
+                    availableSeats.add(Integer.parseInt(seatId));
+                }
+            }
+        }
+        return availableSeats;
+    }
+
+    public void clear() {
+        redisTemplate.getConnectionFactory().getConnection().flushDb();
+    }
 
 }

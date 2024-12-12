@@ -25,4 +25,5 @@ public class SeatReservation {
 
     @Column(nullable = false)
     private String status; // 예약 상태 (RESERVED, COMPLETED 등)
+
 }
