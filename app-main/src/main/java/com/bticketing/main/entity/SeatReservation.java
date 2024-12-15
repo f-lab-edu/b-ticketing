@@ -26,4 +26,9 @@ public class SeatReservation {
     @Column(nullable = false)
     private String status; // 예약 상태 (RESERVED, COMPLETED 등)
 
+    public SeatReservation(Seat seat, int scheduleId, String status) {
+        this.seat = seat;
+        this.scheduleId = scheduleId;
+        this.status = status;
+    }
 }

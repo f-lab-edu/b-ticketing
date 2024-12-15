@@ -1,14 +1,15 @@
 package com.bticketing.main.repository.redis;
-import com.bticketing.main.service.SeatService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.redis.connection.RedisConnection;
+import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.stereotype.Repository;
 
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
-import java.util.stream.Collectors;
 
 @Repository
 public class SeatRedisRepository {
@@ -104,5 +105,25 @@ public class SeatRedisRepository {
     public void clear() {
         redisTemplate.getConnectionFactory().getConnection().flushDb();
     }
+
+    // Redis에 상태 저장
+    public void setSeatStatus(String key, String status) {
+        redisTemplate.opsForValue().set(key, status);
+    }
+
+    public Set<String> scanKeys(String pattern) {
+        return redisTemplate.execute((RedisConnection connection) -> {
+            Set<String> keys = new HashSet<>();
+            Cursor<byte[]> cursor = connection.scan(ScanOptions.scanOptions().match(pattern).count(100).build());
+
+            while (cursor.hasNext()) {
+                keys.add(new String(cursor.next()));
+            }
+            return keys;
+        });
+    }
+
+
+
 
 }

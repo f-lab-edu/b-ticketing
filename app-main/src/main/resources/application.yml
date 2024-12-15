@@ -6,13 +6,13 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
   jpa:
     hibernate:
-      ddl-auto: update
+      ddl-auto: none
     properties:
       hibernate:
         dialect: org.hibernate.dialect.MySQLDialect
   sql:
     init:
-      mode: never
+      mode: always
   data:
     redis:
       host: localhost
@@ -23,3 +23,7 @@ spring:
           max-active: 10
           max-idle: 8
           min-idle: 2
+  logging:
+    level:
+      root: DEBUG
+      com.bticketing.main: DEBUG

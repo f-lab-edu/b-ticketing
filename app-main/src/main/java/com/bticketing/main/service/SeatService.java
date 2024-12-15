@@ -3,8 +3,8 @@ package com.bticketing.main.service;
 import com.bticketing.main.dto.SeatDto;
 import com.bticketing.main.entity.Seat;
 import com.bticketing.main.entity.SeatReservation;
+import com.bticketing.main.exception.SeatAllReservedException;
 import com.bticketing.main.exception.SeatAlreadyReservedException;
-import com.bticketing.main.exception.SeatsNotAvailableException;
 import com.bticketing.main.repository.redis.SeatRedisRepository;
 import com.bticketing.main.repository.seat.SeatRepository;
 import com.bticketing.main.repository.seat.SeatReservationRepository;
@@ -40,32 +40,37 @@ public class SeatService {
 
         // Redis 상태 확인
         String redisStatus = redisRepository.getSeatStatus(seatKey);
-        System.out.println("[TEST] Redis 상태 확인: seatKey=" + seatKey + ", redisStatus=" + redisStatus);
+        logger.debug("[DEBUG] Redis 상태 확인: seatKey={}, redisStatus={}", seatKey, redisStatus);
 
         // DB 동기화
         if (redisStatus == null) {
             redisStatus = fetchAndSyncSeatStatus(scheduleId, seatId);
-            System.out.println("[TEST] DB 동기화 후 Redis 상태: seatKey=" + seatKey + ", redisStatus=" + redisStatus);
+            logger.debug("[DEBUG] DB 동기화 후 Redis 상태: seatKey={}, redisStatus={}", seatKey, redisStatus);
         }
 
         if ("RESERVED".equals(redisStatus)) {
-            System.out.println("[TEST] 좌석이 이미 예약됨: seatKey=" + seatKey + ", scheduleId=" + scheduleId + ", seatId=" + seatId);
+            logger.debug("[DEBUG] 좌석이 이미 예약됨: seatKey={}, scheduleId={}, seatId={}", seatKey, scheduleId, seatId);
             throw new SeatAlreadyReservedException("이미 예약된 좌석입니다.");
         }
 
         return redisRepository.executeWithLock(lockKey, SEAT_RESERVATION_TTL, () -> {
-            System.out.println("[TEST] 락 획득 후 작업 실행: lockKey=" + lockKey);
+            logger.debug("[DEBUG] 락 획득 후 작업 실행: lockKey={}", lockKey);
 
             String currentStatus = redisRepository.getSeatStatus(seatKey);
-            System.out.println("[TEST] 락 획득 후 Redis 상태 확인: seatKey=" + seatKey + ", currentStatus=" + currentStatus);
+            logger.debug("[DEBUG] 락 획득 후 Redis 상태 확인: seatKey={}, currentStatus={}", seatKey, currentStatus);
 
             if ("RESERVED".equals(currentStatus)) {
-                System.out.println("[TEST] 좌석이 이미 예약됨: seatKey=" + seatKey + ", scheduleId=" + scheduleId + ", seatId=" + seatId);
+                logger.debug("[DEBUG] 좌석이 이미 예약됨: seatKey={}, scheduleId={}, seatId={}", seatKey, scheduleId, seatId);
                 throw new SeatAlreadyReservedException("이미 예약된 좌석입니다.");
             }
 
-            updateSeatStatus(scheduleId, seatId, "RESERVED");
-            System.out.println("[TEST] 좌석 상태 업데이트 완료: scheduleId=" + scheduleId + ", seatId=" + seatId + ", 상태=RESERVED");
+            // Seat 객체 조회
+            Seat seat = seatRepository.findById(seatId)
+                    .orElseThrow(() -> new RuntimeException("좌석 정보를 찾을 수 없습니다. seatId=" + seatId));
+
+            // updateSeatStatuses 호출
+            updateSeatStatuses(scheduleId, List.of(seat), "RESERVED");
+            logger.debug("[DEBUG] 좌석 상태 업데이트 완료: scheduleId={}, seatId={}, 상태=RESERVED", scheduleId, seatId);
 
             return new SeatDto(seatId, "RESERVED");
         });
@@ -73,43 +78,38 @@ public class SeatService {
 
     @Transactional
     public List<SeatDto> autoAssignSeats(int scheduleId, int numSeats) {
-        // Step 1: Redis에서 사용 가능한 좌석 ID 가져오기
-        List<Integer> availableSeatIds = redisRepository.getAvailableSeatIds(scheduleId);
-        System.out.println("[DEBUG] Step 1: Redis에서 가져온 availableSeatIds=" + availableSeatIds);
+        logger.debug("[DEBUG] autoAssignSeats 시작. scheduleId={}, 요청 좌석 수={}", scheduleId, numSeats);
 
-        // Step 2: Redis에 데이터가 없으면 DB에서 좌석 상태 가져오기
-        if (availableSeatIds.isEmpty()) {
-            System.out.println("[DEBUG] Step 2: Redis에 데이터 없음. DB에서 좌석 상태 가져오기...");
-            availableSeatIds = fetchAvailableSeats(scheduleId, numSeats);
-            System.out.println("[DEBUG] Step 2: DB에서 가져온 availableSeatIds=" + availableSeatIds);
+        // Step 1: Redis에서 가능한 좌석 확인
+        List<Integer> redisSeatIds = fetchAvailableSeatsFromRedis(scheduleId, numSeats);
+        List<Seat> redisSeats = convertSeatIdsToSeats(redisSeatIds);
+
+        List<Seat> assignedSeats = findConsecutiveSeatsInSameRow(redisSeats, numSeats);
+        if (assignedSeats.size() == numSeats) {
+            logger.debug("[DEBUG] Redis에서 요청 좌석 확보 완료: {}", assignedSeats);
+            updateSeatStatuses(scheduleId, assignedSeats, "RESERVED");
+            return convertToSeatDtos(assignedSeats);
         }
 
-        // Step 3: 연속된 좌석 찾기
-        System.out.println("[DEBUG] Step 3: 연속된 좌석 찾기 시작...");
-        List<Integer> assignedSeatIds = findConsecutiveSeats(availableSeatIds, numSeats);
-        System.out.println("[DEBUG] Step 3: 연속된 좌석 찾기 결과 assignedSeatIds=" + assignedSeatIds);
+        // Step 2: Redis에서 부족할 경우 DB에서 추가 확인
+        List<Seat> dbSeats = fetchAvailableSeatsFromDB(scheduleId);
+        assignedSeats = findConsecutiveSeatsInSameRow(dbSeats, numSeats);
 
-        // Step 4: 연속된 좌석이 없으면 새로 생성 및 할당
-        if (assignedSeatIds.isEmpty()) {
-            System.out.println("[DEBUG] Step 4: 연속된 좌석 없음. 새 좌석 생성 및 할당...");
-            assignedSeatIds = createAndAssignNewSeats(scheduleId, numSeats);
-            System.out.println("[DEBUG] Step 4: 새로 생성된 assignedSeatIds=" + assignedSeatIds);
+        if (assignedSeats.size() == numSeats) {
+            logger.debug("[DEBUG] DB에서 요청 좌석 확보 완료: {}", assignedSeats);
+            updateSeatStatuses(scheduleId, assignedSeats, "RESERVED");
+            return convertToSeatDtos(assignedSeats);
         }
 
-        // Step 5: 좌석 상태 업데이트
-        System.out.println("[DEBUG] Step 5: 상태 업데이트 시작... assignedSeatIds=" + assignedSeatIds);
+        // Step 3: Seat 테이블에서 좌석 확보 및 예약 생성
+        List<Seat> newSeats = createNewSeatReservations(scheduleId, numSeats);
+        if (newSeats.size() < numSeats) {
+            throw new SeatAllReservedException("요청한 좌석 수를 자동 배정할 수 없습니다.");
+        }
 
-        assignedSeatIds.forEach(seatId -> {
-            System.out.println("[DEBUG] Step 5: 상태 업데이트 중... 현재 처리 중인 seatId=" + seatId);
-            updateSeatStatus(scheduleId, seatId, "RESERVED");
-        });
-
-        System.out.println("[DEBUG] Step 5: 좌석 상태 업데이트 완료. 최종 assignedSeatIds=" + assignedSeatIds);
-
-        // Step 6: SeatDto 리스트 반환
-        return assignedSeatIds.stream()
-                .map(seatId -> new SeatDto(seatId, "RESERVED"))
-                .toList();
+        logger.debug("[DEBUG] 새 좌석 예약 완료: {}", newSeats);
+        updateSeatStatuses(scheduleId, newSeats, "RESERVED");
+        return convertToSeatDtos(newSeats);
     }
 
     public List<SeatDto> getSeatsStatus(int scheduleId) {
@@ -123,11 +123,28 @@ public class SeatService {
     // Private Helper Methods
     // -------------------------------
 
-    private String fetchAndSyncSeatStatus(int scheduleId, int seatId) {
-        System.out.println("[TEST] seatReservationRepository 호출: seatId=" + seatId + ", scheduleId=" + scheduleId);
-        Optional<SeatReservation> dbReservation = seatReservationRepository.findBySeatAndSchedule(seatId, scheduleId);
-        System.out.println("[TEST] seatReservationRepository 결과: " + dbReservation);
+    // 분산락 걸기 메서드
+    private String generateLockKey(int scheduleId, int seatId) {
+        return String.format("seat:lock:%d:%d", scheduleId, seatId);
+    }
 
+    // redis 좌석 키 생성 메서드
+    private String generateSeatKey(int scheduleId, int seatId) {
+        return String.format("seat:%d:%d", scheduleId, seatId);
+    }
+
+    private List<SeatDto> convertToSeatDtos(List<Seat> seats) {
+        return seats.stream()
+                .map(seat -> new SeatDto(seat.getSeatId(), "RESERVED")) // 상태를 RESERVED로 설정
+                .toList();
+    }
+    private List<Seat> convertSeatIdsToSeats(List<Integer> seatIds) {
+        return seatRepository.findAllById(seatIds);
+    }
+
+    //Redis 좌석 상태 조회 후 db상태 조회 및 동기화 메서드
+    private String fetchAndSyncSeatStatus(int scheduleId, int seatId) {
+        Optional<SeatReservation> dbReservation = seatReservationRepository.findBySeatAndSchedule(seatId, scheduleId);
         if (dbReservation.isEmpty()) {
             Seat seat = seatRepository.findById(seatId)
                     .orElseThrow(() -> new RuntimeException("좌석 정보를 찾을 수 없습니다."));
@@ -139,137 +156,115 @@ public class SeatService {
             seatReservationRepository.save(newReservation);
 
             redisRepository.setSeatStatus(generateSeatKey(scheduleId, seatId), "AVAILABLE", SEAT_RESERVATION_TTL);
-            System.out.println("[TEST] DB 및 Redis에 새로운 상태 추가: seatId=" + seatId + ", scheduleId=" + scheduleId + ", 상태=AVAILABLE");
             return "AVAILABLE";
         } else {
             String status = dbReservation.get().getStatus();
             redisRepository.setSeatStatus(generateSeatKey(scheduleId, seatId), status, SEAT_RESERVATION_TTL);
-            System.out.println("[TEST] 기존 DB 상태를 Redis에 동기화: seatId=" + seatId + ", scheduleId=" + scheduleId + ", 상태=" + status);
             return status;
         }
     }
 
-    private List<Integer> fetchAvailableSeats(int scheduleId, int numSeats) {
-        System.out.println("[DEBUG] fetchAvailableSeats 호출: scheduleId=" + scheduleId + ", numSeats=" + numSeats);
+    //Redis AVAILABLE 조회 메서드
+    private List<Integer> fetchAvailableSeatsFromRedis(int scheduleId, int numSeats) {
+        logger.debug("[DEBUG] Redis에서 AVAILABLE 상태 좌석 조회 시작. scheduleId={}, 요청 좌석 수={}", scheduleId, numSeats);
 
-        // Step 1: DB에서 사용 가능한 좌석 ID 가져오기
-        List<Integer> availableSeatIds = seatReservationRepository.findAvailableSeats(scheduleId)
+        String pattern = "seat:" + scheduleId + ":*";
+        Set<String> keys = redisRepository.scanKeys(pattern);
+
+        List<Integer> availableSeats = new ArrayList<>();
+        for (String key : keys) {
+            String status = redisRepository.getSeatStatus(key);
+            if ("AVAILABLE".equals(status)) {
+                int seatId = Integer.parseInt(key.split(":")[2]);
+                availableSeats.add(seatId);
+            }
+            if (availableSeats.size() >= numSeats) {
+                break;
+            }
+        }
+
+        logger.debug("[DEBUG] Redis에서 조회된 AVAILABLE 좌석: {}", availableSeats);
+        return availableSeats;
+    }
+
+    //DB AVAILABLE 조회 메서드
+    private List<Seat> fetchAvailableSeatsFromDB(int scheduleId) {
+        logger.debug("[DEBUG] DB에서 사용 가능한 좌석 조회 시작. scheduleId={}", scheduleId);
+
+        List<SeatReservation> reservations = seatReservationRepository.findAvailableSeats(scheduleId);
+        return reservations.stream()
+                .map(SeatReservation::getSeat)
+                .collect(Collectors.toList());
+    }
+
+    //new SeatReservation값 생성 메서드
+    private List<Seat> createNewSeatReservations(int scheduleId, int numSeats) {
+        logger.debug("[DEBUG] Seat 테이블에서 새 좌석 예약 생성 시작. scheduleId={}, 요청 좌석 수={}", scheduleId, numSeats);
+
+        List<Seat> allSeats = seatRepository.findAll(); // 모든 좌석 조회
+        Set<Integer> reservedSeatIds = seatReservationRepository.findByScheduleId(scheduleId)
                 .stream()
                 .map(res -> res.getSeat().getSeatId())
+                .collect(Collectors.toSet());
+
+        List<Seat> availableSeats = allSeats.stream()
+                .filter(seat -> !reservedSeatIds.contains(seat.getSeatId()))
                 .toList();
-        System.out.println("[DEBUG] fetchAvailableSeats 결과: availableSeatIds=" + availableSeatIds);
 
-        // Step 2: 사용 가능한 좌석이 부족한 경우 필요한 만큼 생성
-        if (availableSeatIds.isEmpty()) {
-            System.out.println("[DEBUG] 사용 가능한 좌석이 없음. 새 좌석 생성 시작...");
-            availableSeatIds = createAndAssignNewSeats(scheduleId, numSeats);
-            System.out.println("[DEBUG] 새로 생성된 좌석 ID: " + availableSeatIds);
+        List<Seat> newReservations = new ArrayList<>();
+        for (int i = 0; i < Math.min(numSeats, availableSeats.size()); i++) {
+            Seat seat = availableSeats.get(i);
+            SeatReservation reservation = new SeatReservation(seat, scheduleId, "RESERVED");
+            seatReservationRepository.save(reservation);
+
+            String seatKey = generateSeatKey(scheduleId, seat.getSeatId());
+            redisRepository.setSeatStatus(seatKey, "RESERVED", SEAT_RESERVATION_TTL);
+
+            newReservations.add(seat);
         }
 
-        return availableSeatIds;
+        return newReservations;
     }
 
+    //연속좌석 탐색 메서드
+    private List<Seat> findConsecutiveSeatsInSameRow(List<Seat> seats, int numSeats) {
+        Map<String, List<Seat>> seatsByRow = seats.stream()
+                .collect(Collectors.groupingBy(Seat::getSeatRow));
 
-    private List<Integer> createAndAssignNewSeats(int scheduleId, int numSeats) {
-        System.out.println("[DEBUG] createAndAssignNewSeats 호출: scheduleId=" + scheduleId + ", numSeats=" + numSeats);
+        for (List<Seat> rowSeats : seatsByRow.values()) {
+            rowSeats.sort(Comparator.comparingInt(Seat::getSeatNumber));
 
-        try {
-            List<String> allSeatRows = seatRepository.findAllSeatRows();
-            System.out.println("[DEBUG] 전체 좌석 행 정보: allSeatRows=" + allSeatRows);
-
-            for (String seatRow : allSeatRows) {
-                List<Integer> seatIdsInRow = seatRepository.findSeatIdsByRow(seatRow);
-                System.out.println("[DEBUG] 현재 열의 좌석 ID: seatRow=" + seatRow + ", seatIdsInRow=" + seatIdsInRow);
-
-                List<Integer> reservedSeatIds = seatReservationRepository.findByScheduleIdAndSeatRow(scheduleId, seatRow)
-                        .stream()
-                        .map(reservation -> reservation.getSeat().getSeatId())
-                        .toList();
-                System.out.println("[DEBUG] 현재 열의 예약된 좌석 ID: reservedSeatIds=" + reservedSeatIds);
-
-                List<Integer> availableSeatIds = seatIdsInRow.stream()
-                        .filter(seatId -> !reservedSeatIds.contains(seatId))
-                        .toList();
-                System.out.println("[DEBUG] 현재 열의 사용 가능한 좌석 ID: availableSeatIds=" + availableSeatIds);
-
-                List<Integer> assignedSeats = findConsecutiveSeats(availableSeatIds, numSeats);
-                if (!assignedSeats.isEmpty()) {
-                    System.out.println("[DEBUG] 연속된 좌석 찾기 성공: assignedSeats=" + assignedSeats);
-                    return assignedSeats;
-                }
-            }
-        } catch (Exception e) {
-            System.out.println("[ERROR] createAndAssignNewSeats 실행 중 오류 발생: " + e.getMessage());
-            e.printStackTrace();
-        }
-
-        throw new SeatsNotAvailableException("요청한 좌석 수를 자동 배정할 수 없습니다.");
-    }
-
-    public boolean updateSeatStatus(int scheduleId, int seatId, String status) {
-        System.out.println("[DEBUG] Seat 상태 업데이트 시작: scheduleId=" + scheduleId + ", seatId=" + seatId);
-
-        // 존재 여부 확인
-        SeatReservation reservation = seatReservationRepository.findBySeatAndSchedule(seatId, scheduleId)
-                .orElseThrow(() -> new RuntimeException("좌석 정보를 찾을 수 없습니다: seatId=" + seatId + ", scheduleId=" + scheduleId));
-
-        // 상태 업데이트
-        reservation.setStatus(status);
-        seatReservationRepository.save(reservation);
-        System.out.println("[DEBUG] Seat 상태 업데이트 완료: " + reservation);
-        return true;
-    }
-
-    private boolean isSeatReserved(String seatKey) {
-        return "RESERVED".equals(redisRepository.getSeatStatus(seatKey));
-    }
-
-    private String generateLockKey(int scheduleId, int seatId) {
-        return String.format("seat:lock:%d:%d", scheduleId, seatId);
-    }
-
-    private String generateSeatKey(int scheduleId, int seatId) {
-        return String.format("seat:%d:%d", scheduleId, seatId);
-    }
-
-    private List<Integer> findConsecutiveSeats(List<Integer> availableSeatIds, int numSeats) {
-        System.out.println("[DEBUG] findConsecutiveSeats 호출: availableSeatIds=" + availableSeatIds + ", numSeats=" + numSeats);
-
-        if (availableSeatIds == null || availableSeatIds.isEmpty()) {
-            System.out.println("[DEBUG] 사용 가능한 좌석 ID가 비어 있습니다. 빈 리스트 반환.");
-            return Collections.emptyList();
-        }
-
-        // 리스트 복사본 생성
-        List<Integer> mutableAvailableSeatIds = new ArrayList<>(availableSeatIds);
-
-        try {
-            // 정렬
-            Collections.sort(mutableAvailableSeatIds);
-            System.out.println("[DEBUG] 정렬된 availableSeatIds: " + mutableAvailableSeatIds);
-
-            List<Integer> consecutiveSeats = new ArrayList<>();
-            for (int i = 0; i < mutableAvailableSeatIds.size(); i++) {
+            List<Seat> consecutiveSeats = new ArrayList<>();
+            for (Seat seat : rowSeats) {
                 if (consecutiveSeats.isEmpty() ||
-                        mutableAvailableSeatIds.get(i) == consecutiveSeats.get(consecutiveSeats.size() - 1) + 1) {
-                    consecutiveSeats.add(mutableAvailableSeatIds.get(i));
+                        consecutiveSeats.get(consecutiveSeats.size() - 1).getSeatNumber() + 1 == seat.getSeatNumber()) {
+                    consecutiveSeats.add(seat);
                     if (consecutiveSeats.size() == numSeats) {
-                        System.out.println("[DEBUG] 연속된 좌석 찾기 성공: " + consecutiveSeats);
                         return consecutiveSeats;
                     }
                 } else {
                     consecutiveSeats.clear();
-                    consecutiveSeats.add(mutableAvailableSeatIds.get(i));
+                    consecutiveSeats.add(seat);
                 }
             }
-        } catch (Exception e) {
-            System.out.println("[ERROR] findConsecutiveSeats 실행 중 오류 발생: " + e.getMessage());
-            e.printStackTrace();
         }
-
-        System.out.println("[DEBUG] 연속된 좌석을 찾지 못함. 빈 리스트 반환.");
         return Collections.emptyList();
     }
+
+    //Redis,DB 동기화 및 상테 업데이트 메서드
+    private void updateSeatStatuses(int scheduleId, List<Seat> seats, String status) {
+        for (Seat seat : seats) {
+            String redisKey = generateSeatKey(scheduleId, seat.getSeatId());
+            redisRepository.setSeatStatus(redisKey, status, SEAT_RESERVATION_TTL);
+
+            SeatReservation reservation = seatReservationRepository.findBySeatAndSchedule(seat.getSeatId(), scheduleId)
+                    .orElseGet(() -> new SeatReservation(seat, scheduleId, status));
+
+            reservation.setStatus(status);
+            seatReservationRepository.save(reservation);
+        }
+    }
+
 
 
 }

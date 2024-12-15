@@ -16,6 +16,12 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(errorResponse); // 409 Conflict
     }
 
+    // 자동좌석이 가능하지 않을 경우 처리
+    @ExceptionHandler(SeatAllReservedException.class)
+    public ResponseEntity<String> handleSeatAllReservedException(SeatAllReservedException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ex.getMessage());
+    }
+
     // 요청한 좌석을 찾을 수 없는 경우 처리
     @ExceptionHandler(SeatsNotAvailableException.class)
     public ResponseEntity<String> handleSeatsNotAvailableException(SeatsNotAvailableException ex) {

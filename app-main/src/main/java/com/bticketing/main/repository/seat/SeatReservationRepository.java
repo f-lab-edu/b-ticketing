@@ -8,7 +8,9 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 
 @Repository
@@ -22,7 +24,7 @@ public interface SeatReservationRepository extends JpaRepository<SeatReservation
     @Query("SELECT r FROM SeatReservation r WHERE r.seat.seatId = :seatId AND r.scheduleId = :scheduleId")
     Optional<SeatReservation> findBySeatAndSchedule(@Param("seatId") int seatId, @Param("scheduleId") int scheduleId);
 
-    @Query("SELECT sr FROM SeatReservation sr WHERE sr.scheduleId = :scheduleId AND sr.seat.SeatRow = :seatRow")
+    @Query("SELECT sr FROM SeatReservation sr WHERE sr.scheduleId = :scheduleId AND sr.seat.seatRow = :seatRow")
     List<SeatReservation> findByScheduleIdAndSeatRow(@Param("scheduleId") int scheduleId, @Param("seatRow") String seatRow);
 
     @Query("SELECT r FROM SeatReservation r WHERE r.scheduleId = :scheduleId AND r.status = 'AVAILABLE'")
@@ -30,5 +32,6 @@ public interface SeatReservationRepository extends JpaRepository<SeatReservation
 
     @Query("SELECT sr.seat FROM SeatReservation sr WHERE sr.scheduleId = :scheduleId")
     List<Seat> findSeatsByScheduleId(@Param("scheduleId") int scheduleId);
+
 
 }

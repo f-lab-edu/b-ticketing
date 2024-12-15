@@ -11,10 +11,10 @@ import java.util.List;
 
 @Repository
 public interface SeatRepository extends JpaRepository<Seat, Integer> {
-    @Query("SELECT DISTINCT s.SeatRow FROM Seat s")
+    @Query("SELECT DISTINCT s.seatRow FROM Seat s")
     List<String> findAllSeatRows();
 
-    @Query("SELECT s.seatId FROM Seat s WHERE s.SeatRow = :seatRow ORDER BY s.SeatNumber")
+    @Query("SELECT s.seatId FROM Seat s WHERE s.seatRow = :seatRow ORDER BY s.seatNumber")
     List<Integer> findSeatIdsByRow(@Param("seatRow") String seatRow);
 
 }
