@@ -1,4 +1,5 @@
 package com.bticketing.main.repository.redis;
+import com.bticketing.main.service.SeatService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.connection.RedisConnection;
@@ -8,6 +9,7 @@ import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.stereotype.Repository;
 
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
@@ -15,7 +17,6 @@ import java.util.function.Supplier;
 public class SeatRedisRepository {
 
     private final RedisTemplate<String, Object> redisTemplate;
-    private static final Logger logger = LoggerFactory.getLogger(SeatService.class);
 
     public SeatRedisRepository(RedisTemplate<String, Object> redisTemplate) {
         this.redisTemplate = redisTemplate;
@@ -45,27 +46,29 @@ public class SeatRedisRepository {
         redisTemplate.opsForValue().set(key, value, ttlInSeconds, TimeUnit.SECONDS);
     }
 
+    // 비동기 락 획득
+    public CompletableFuture<Boolean> acquireLockAsync(String key, String value, long ttlInSeconds) {
+        return CompletableFuture.supplyAsync(() -> {
+            Boolean success = redisTemplate.opsForValue().setIfAbsent(key, value, ttlInSeconds, TimeUnit.SECONDS);
+            return Boolean.TRUE.equals(success);
+        });
+    }
 
-    public <T> T executeWithLock(String lockKey, long ttlInSeconds, Supplier<T> action) {
-        System.out.println("[TEST] Lock 요청: lockKey=" + lockKey + ", ttl=" + ttlInSeconds);
-        boolean lockAcquired = acquireLock(lockKey, "LOCKED", ttlInSeconds);
-        if (!lockAcquired) {
-            System.out.println("[TEST] Lock 획득 실패: lockKey=" + lockKey);
-            throw new RuntimeException("다른 작업이 진행 중입니다. 잠시 후 다시 시도해주세요.");
-        }
+    // 비동기 락 해제
+    public CompletableFuture<Void> releaseLockAsync(String key) {
+        return CompletableFuture.runAsync(() -> redisTemplate.delete(key));
+    }
 
-        System.out.println("[TEST] Lock 획득 성공: lockKey=" + lockKey);
-        try {
-            T result = action.get(); // 람다로 전달받은 작업 실행
-            System.out.println("[TEST] 작업 실행 완료: lockKey=" + lockKey + ", result=" + result);
-            return result;
-        } catch (Exception e) {
-            System.out.println("[TEST] 작업 실행 중 예외 발생: lockKey=" + lockKey + ", error=" + e.getMessage());
-            throw e;
-        } finally {
-            releaseLock(lockKey); // 작업 후 락 해제
-            System.out.println("[TEST] Lock 해제: lockKey=" + lockKey);
-        }
+    // 비동기 락 획득 및 작업 실행
+    public <T> CompletableFuture<T> executeWithLockAsync(String lockKey, long ttlInSeconds, Supplier<CompletableFuture<T>> action) {
+        return acquireLockAsync(lockKey, "LOCKED", ttlInSeconds)
+                .thenCompose(acquired -> {
+                    if (!acquired) {
+                        return CompletableFuture.failedFuture(new RuntimeException("다른 작업이 진행 중입니다. 잠시 후 다시 시도해주세요."));
+                    }
+                    return action.get()
+                            .whenComplete((result, ex) -> releaseLockAsync(lockKey)); // 작업 완료 후 락 해제 (성공/실패 모두)
+                });
     }
 
     public Map<String, String> getAllReservedSeats(int scheduleId) {
