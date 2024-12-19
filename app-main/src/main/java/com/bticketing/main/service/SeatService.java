@@ -9,7 +9,6 @@ import com.bticketing.main.repository.seat.SeatRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -39,12 +38,11 @@ public class SeatService {
         this.threadPoolTaskExecutor = threadPoolTaskExecutor;
     }
 
-    @Async("threadPoolTaskExecutor")
     public CompletableFuture<SeatDto> selectSeat(int scheduleId, int seatId) {
         String lockKey = generateLockKey(scheduleId, seatId);
         String seatKey = generateSeatKey(scheduleId, seatId);
 
-        return CompletableFuture.completedFuture(redisRepository.getSeatStatus(seatKey))
+        return CompletableFuture.supplyAsync(() -> redisRepository.getSeatStatus(seatKey), threadPoolTaskExecutor)
                 .thenCompose(redisStatus -> {
                     if (redisStatus == null) {
                         return CompletableFuture.supplyAsync(() ->
@@ -84,7 +82,6 @@ public class SeatService {
                 });
     }
 
-    @Async("threadPoolTaskExecutor")
     public CompletableFuture<List<SeatDto>> autoAssignSeats(int scheduleId, int numSeats) {
         logger.debug("[DEBUG] autoAssignSeats 시작. scheduleId={}, 요청 좌석 수={}", scheduleId, numSeats);
 
@@ -105,7 +102,7 @@ public class SeatService {
                     if (ex != null) {
                         logger.error("좌석 자동 할당 중 에러 발생: ", ex);
                         if (ex.getCause() instanceof SeatAllReservedException) {
-                            throw (SeatAllReservedException) ex.getCause(); // SeatAllReservedException을 그대로 throw
+                            throw (SeatAllReservedException) ex.getCause();
                         }
                         throw new RuntimeException("좌석 자동 할당 중 에러가 발생했습니다.", ex.getCause());
                     }
@@ -160,7 +157,6 @@ public class SeatService {
         logger.debug("[DEBUG] Redis에서 조회된 AVAILABLE 좌석: {}", availableSeats);
         return availableSeats;
     }
-
 
     private List<Seat> findConsecutiveSeatsInSameRow(List<Seat> seats, int numSeats) {
         Map<String, List<Seat>> seatsByRow = seats.stream()

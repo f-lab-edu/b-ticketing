@@ -8,10 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
-import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
-import org.springframework.web.client.RestTemplate;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -20,7 +17,6 @@ import java.util.concurrent.ThreadPoolExecutor;
 import static org.junit.jupiter.api.Assertions.*;
 
 @SpringBootTest
-@EnableAsync
 class SeatServiceAsyncTest {
 
     @Autowired
@@ -31,35 +27,32 @@ class SeatServiceAsyncTest {
 
     @Autowired
     private SeatRedisRepository redisRepository;
+
     @Autowired
     @Qualifier("threadPoolTaskExecutor")
     private ThreadPoolTaskExecutor taskExecutor;
 
     @BeforeEach
     void setUp() {
-
         // DB 초기화
         redisRepository.clear();
         seatReservationRepository.deleteAll();
-
     }
-
 
     @Test
     void testThreadPoolConfiguration() {
-        assertNotNull(taskExecutor);
+        assertNotNull(taskExecutor, "ThreadPoolTaskExecutor should not be null");
 
         // 내부 ThreadPoolExecutor 확인
         ThreadPoolExecutor executor = taskExecutor.getThreadPoolExecutor();
-        assertNotNull(executor);
+        assertNotNull(executor, "ThreadPoolExecutor should not be null");
 
         // 스레드 풀 설정 확인
-        assertEquals(10, executor.getCorePoolSize());
-        assertEquals(50, executor.getMaximumPoolSize());
-        assertEquals(100, taskExecutor.getQueueCapacity());
-        assertEquals("MyExecutor-", taskExecutor.getThreadNamePrefix());
+        assertEquals(10, executor.getCorePoolSize(), "Core pool size should be 10");
+        assertEquals(50, executor.getMaximumPoolSize(), "Maximum pool size should be 50");
+        assertEquals(100, taskExecutor.getQueueCapacity(), "Queue capacity should be 100");
+        assertEquals("MyExecutor-", taskExecutor.getThreadNamePrefix(), "Thread name prefix should be 'MyExecutor-'");
     }
-
 
     @Test
     void testSelectSeatAsyncExecution() throws Exception {
@@ -71,10 +64,10 @@ class SeatServiceAsyncTest {
         CompletableFuture<SeatDto> future = seatService.selectSeat(scheduleId, seatId);
 
         // Then
-        assertNotNull(future); // future가 null인지 확인
+        assertNotNull(future, "Future object should not be null");
         SeatDto seatDto = future.get(); // 비동기 작업 결과 가져오기
-        assertNotNull(seatDto); // 반환된 객체가 null인지 확인
-        assertEquals("RESERVED", seatDto.getStatus()); // 상태 확인
+        assertNotNull(seatDto, "SeatDto should not be null");
+        assertEquals("RESERVED", seatDto.getStatus(), "Seat status should be 'RESERVED'");
     }
 
     @Test
@@ -87,16 +80,17 @@ class SeatServiceAsyncTest {
         CompletableFuture<SeatDto> future = seatService.selectSeat(scheduleId, seatId);
 
         // Then
-        assertNotNull(future); // future가 null인지 확인
+        assertNotNull(future, "Future object should not be null");
 
         future.thenAccept(seatDto -> {
-            assertNotNull(seatDto); // 반환된 객체가 null인지 확인
-            assertEquals("RESERVED", seatDto.getStatus()); // 상태 확인
+            assertNotNull(seatDto, "SeatDto should not be null");
+            assertEquals("RESERVED", seatDto.getStatus(), "Seat status should be 'RESERVED'");
 
             String threadName = Thread.currentThread().getName();
             System.out.println("Async executed in thread: " + threadName);
-            assertTrue(threadName.startsWith("MyExecutor-")); // 스레드 이름 확인
-        }).get(); // 결과를 가져오며 비동기 작업 대기
+            assertTrue(threadName.startsWith("MyExecutor-"),
+                    "Expected execution in MyExecutor, but was: " + threadName);
+        }).get(); // 비동기 작업이 완료될 때까지 대기
     }
 
     @Test
@@ -109,16 +103,16 @@ class SeatServiceAsyncTest {
         CompletableFuture<List<SeatDto>> future = seatService.autoAssignSeats(scheduleId, numSeats);
 
         // Then
-        assertNotNull(future, "The future object should not be null");
+        assertNotNull(future, "Future object should not be null");
 
-        // 비동기 작업 완료 대기 및 스레드 이름 확인
-        future.thenAcceptAsync(seatDtos -> {
-            assertNotNull(seatDtos, "The seatDtos list should not be null");
+        future.thenAccept(seatDtos -> {
+            assertNotNull(seatDtos, "SeatDtos list should not be null");
+            assertEquals(numSeats, seatDtos.size(), "The number of assigned seats should match the requested number");
+
             String threadName = Thread.currentThread().getName();
             System.out.println("Async executed in thread: " + threadName);
             assertTrue(threadName.startsWith("MyExecutor-"),
                     "Expected execution in MyExecutor, but was: " + threadName);
-        }, taskExecutor).get();// get()을 호출하여 비동기 작업이 완료될 때까지 기다림
+        }).get(); // 비동기 작업이 완료될 때까지 대기
     }
-
 }
