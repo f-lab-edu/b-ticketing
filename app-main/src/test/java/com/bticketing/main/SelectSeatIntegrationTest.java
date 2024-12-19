@@ -6,11 +6,15 @@ import com.bticketing.main.entity.SeatReservation;
 import com.bticketing.main.repository.redis.SeatRedisRepository;
 import com.bticketing.main.repository.seat.SeatRepository;
 import com.bticketing.main.repository.seat.SeatReservationRepository;
+import jakarta.persistence.EntityManager;
+import jakarta.transaction.Transactional;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
+
+import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.*;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.web.client.RestTemplate;
 
@@ -21,9 +25,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
-class SeatSelectionControllerIntegrationTest {
+public class SelectSeatIntegrationTest {
 
-    private static final String BASE_URL = "http://localhost:8080/seats";
+    @LocalServerPort
+    private int port;
 
     @Autowired
     private SeatRepository seatRepository;
@@ -34,46 +39,49 @@ class SeatSelectionControllerIntegrationTest {
     @Autowired
     private SeatRedisRepository redisRepository;
 
-    private final RestTemplate restTemplate = new RestTemplate();
+
+    private RestTemplate restTemplate;
+    private String baseUrl;
 
     @BeforeEach
     void setUp() {
-        // 공통 좌석 데이터 초기화
-        redisRepository.clear(); // Redis 데이터 초기화
-        seatReservationRepository.deleteAll(); // DB 예약 데이터 초기화
-        seatRepository.deleteAll(); // DB 좌석 데이터 초기화
+        // RestTemplate 초기화
+        restTemplate = new RestTemplate(); // RestTemplate 직접 초기화
+        baseUrl = "http://localhost:" + port + "/seats";  // Base URL 설정
 
-        // 기본 좌석 데이터 추가
-        seatRepository.save(new Seat(1, "A", 1));
-        seatRepository.save(new Seat(2, "A", 2));
-        seatRepository.save(new Seat(3, "A", 3));
-        seatRepository.save(new Seat(4, "B", 1));
-        seatRepository.save(new Seat(5, "B", 2));
+        // DB 초기화 로직 제거
+        redisRepository.clear();
+        seatReservationRepository.deleteAll(); // 예약 정보만 초기화
+
+        // 좌석 데이터는 DB에 이미 삽입되어 있으므로 확인만 수행
+        System.out.println("[SETUP] DB 상태 확인: " + seatRepository.findAll());
     }
+
 
     @Test
     void testSelectSeat_NoDataInRedisAndDb() {
-        // Scenario 1: Redis와 DB 모두 데이터가 없는 경우
+        // Scenario: Redis와 DB 모두 데이터가 없는 경우
         int scheduleId = 1;
         int seatId = 1;
 
-        // Redis 상태 확인
+        // 초기 상태 확인
         assertThat(redisRepository.getSeatStatus("seat:" + scheduleId + ":" + seatId)).isNull();
+        assertThat(seatReservationRepository.findBySeatAndSchedule(seatId, scheduleId)).isEmpty();
 
-        String url = BASE_URL + "/select?scheduleId=" + scheduleId + "&seatId=" + seatId;
-
+        // selectSeat 호출
+        String url = baseUrl + "/select?scheduleId=" + scheduleId + "&seatId=" + seatId;
         ResponseEntity<SeatDto> response = restTemplate.postForEntity(url, null, SeatDto.class);
 
-        // Redis에 RESERVED 상태가 기록되었는지 확인
+        // Redis 상태 확인
         String redisStatus = redisRepository.getSeatStatus("seat:" + scheduleId + ":" + seatId);
         assertThat(redisStatus).isEqualTo("RESERVED");
 
-        // DB에 RESERVED 상태로 저장되었는지 확인
+        // DB 상태 확인
         SeatReservation reservation = seatReservationRepository.findBySeatAndSchedule(seatId, scheduleId)
-                .orElseThrow(() -> new AssertionError("DB에 예약 정보가 존재하지 않습니다."));
+                .orElseThrow(() -> new AssertionError("DB에 예약 정보가 생성되지 않았습니다."));
         assertThat(reservation.getStatus()).isEqualTo("RESERVED");
 
-        // 응답 검증
+        // 응답 확인
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().getSeatId()).isEqualTo(seatId);
@@ -90,7 +98,7 @@ class SeatSelectionControllerIntegrationTest {
         Seat seat = seatRepository.findById(seatId).orElseThrow();
         seatReservationRepository.save(new SeatReservation(1, seat, scheduleId, "AVAILABLE"));
 
-        String url = BASE_URL + "/select?scheduleId=" + scheduleId + "&seatId=" + seatId;
+        String url = baseUrl + "/select?scheduleId=" + scheduleId + "&seatId=" + seatId;
 
         ResponseEntity<SeatDto> response = restTemplate.postForEntity(url, null, SeatDto.class);
 
@@ -121,7 +129,7 @@ class SeatSelectionControllerIntegrationTest {
         seatReservationRepository.save(new SeatReservation(1, seat, scheduleId, "RESERVED"));
         redisRepository.setSeatStatus("seat:" + scheduleId + ":" + seatId, "RESERVED", 300);
 
-        String url = BASE_URL + "/select?scheduleId=" + scheduleId + "&seatId=" + seatId;
+        String url = baseUrl + "/select?scheduleId=" + scheduleId + "&seatId=" + seatId;
 
         ResponseEntity<String> response = restTemplate.postForEntity(url, null, String.class);
 
@@ -141,7 +149,7 @@ class SeatSelectionControllerIntegrationTest {
         seatReservationRepository.save(new SeatReservation(1, seat, scheduleId, "AVAILABLE"));
         redisRepository.setSeatStatus("seat:" + scheduleId + ":" + seatId, "RESERVED", 300);
 
-        String url = BASE_URL + "/select?scheduleId=" + scheduleId + "&seatId=" + seatId;
+        String url = baseUrl + "/select?scheduleId=" + scheduleId + "&seatId=" + seatId;
 
         ResponseEntity<String> response = restTemplate.postForEntity(url, null, String.class);
 
