@@ -51,63 +51,47 @@ public class SeatService {
                         return CompletableFuture.completedFuture(redisStatus);
                     }
                 })
-                .thenCompose(status -> {
+                .thenApply(status -> {
+                    // 상태가 "RESERVED"인 경우 예외 발생
                     if ("RESERVED".equals(status)) {
-                        return CompletableFuture.failedFuture(new SeatAlreadyReservedException("이미 예약된 좌석입니다."));
-                    } else {
-                        return redisRepository.executeWithLockAsync(lockKey, SEAT_RESERVATION_TTL, () ->
-                                CompletableFuture.supplyAsync(() -> {
-                                    String currentStatus = redisRepository.getSeatStatus(seatKey);
-                                    if ("RESERVED".equals(currentStatus)) {
-                                        throw new SeatAlreadyReservedException("이미 예약된 좌석입니다.");
-                                    }
-                                    Seat seat = seatRepository.findById(seatId)
-                                            .orElseThrow(() -> new RuntimeException("좌석 정보를 찾을 수 없습니다. seatId=" + seatId));
-
-                                    transactionManager.updateSeatStatuses(scheduleId, List.of(seat), "RESERVED");
-                                    logger.debug("[DEBUG] 좌석 상태 업데이트 완료: scheduleId={}, seatId={}, 상태=RESERVED", scheduleId, seatId);
-                                    return new SeatDto(seat.getSeatId(), "RESERVED");
-                                }, threadPoolTaskExecutor));
+                        throw new SeatAlreadyReservedException("이미 예약된 좌석입니다.");
                     }
+                    return status; // "AVAILABLE" 등의 상태
                 })
-                .handle((result, ex) -> {
-                    if (ex != null) {
-                        logger.error("좌석 선택 중 에러 발생: ", ex);
-                        if (ex.getCause() instanceof SeatAlreadyReservedException) {
-                            throw (SeatAlreadyReservedException) ex.getCause();
-                        }
-                        throw new RuntimeException("좌석 선택 중 에러가 발생했습니다.", ex.getCause());
-                    }
-                    return result;
+                .thenCompose(status -> {
+                    // 락을 얻어야 하는 부분만 비동기로 처리
+                    return redisRepository.executeWithLockAsync(lockKey, SEAT_RESERVATION_TTL, () ->
+                            CompletableFuture.supplyAsync(() -> {
+                                String currentStatus = redisRepository.getSeatStatus(seatKey);
+                                if ("RESERVED".equals(currentStatus)) {
+                                    throw new SeatAlreadyReservedException("이미 예약된 좌석입니다.");
+                                }
+                                Seat seat = seatRepository.findById(seatId)
+                                        .orElseThrow(() -> new RuntimeException("좌석 정보를 찾을 수 없습니다. seatId=" + seatId));
+
+                                transactionManager.updateSeatStatuses(scheduleId, List.of(seat), "RESERVED");
+                                logger.debug("좌석 상태 업데이트 완료: scheduleId={}, seatId={}, 상태=RESERVED", scheduleId, seatId);
+                                return new SeatDto(seat.getSeatId(), "RESERVED");
+                            }, threadPoolTaskExecutor));
                 });
     }
 
     public CompletableFuture<List<SeatDto>> autoAssignSeats(int scheduleId, int numSeats) {
-        logger.debug("[DEBUG] autoAssignSeats 시작. scheduleId={}, 요청 좌석 수={}", scheduleId, numSeats);
+        logger.debug("autoAssignSeats 시작. scheduleId={}, 요청 좌석 수={}", scheduleId, numSeats);
 
         return CompletableFuture.supplyAsync(() -> {
-                    List<Integer> redisSeatIds = fetchAvailableSeatsFromRedis(scheduleId, numSeats);
-                    List<Seat> redisSeats = convertSeatIdsToSeats(redisSeatIds);
+            List<Integer> redisSeatIds = fetchAvailableSeatsFromRedis(scheduleId, numSeats);
+            List<Seat> redisSeats = convertSeatIdsToSeats(redisSeatIds);
 
-                    List<Seat> assignedSeats = findConsecutiveSeatsInSameRow(redisSeats, numSeats);
-                    if (assignedSeats.size() == numSeats) {
-                        logger.debug("[DEBUG] Redis에서 요청 좌석 확보 완료: {}", assignedSeats);
-                        transactionManager.updateSeatStatuses(scheduleId, assignedSeats, "RESERVED");
-                        return convertToSeatDtos(assignedSeats);
-                    }
+            List<Seat> assignedSeats = findConsecutiveSeatsInSameRow(redisSeats, numSeats);
+            if (assignedSeats.size() == numSeats) {
+                logger.debug("Redis에서 요청 좌석 확보 완료: {}", assignedSeats);
+                transactionManager.updateSeatStatuses(scheduleId, assignedSeats, "RESERVED");
+                return convertToSeatDtos(assignedSeats);
+            }
 
-                    return transactionManager.findAndAssignAvailableSeats(scheduleId, numSeats);
-                }, threadPoolTaskExecutor)
-                .handle((result, ex) -> {
-                    if (ex != null) {
-                        logger.error("좌석 자동 할당 중 에러 발생: ", ex);
-                        if (ex.getCause() instanceof SeatAllReservedException) {
-                            throw (SeatAllReservedException) ex.getCause();
-                        }
-                        throw new RuntimeException("좌석 자동 할당 중 에러가 발생했습니다.", ex.getCause());
-                    }
-                    return result;
-                });
+            return transactionManager.findAndAssignAvailableSeats(scheduleId, numSeats);
+        }, threadPoolTaskExecutor);
     }
 
     public CompletableFuture<List<SeatDto>> getSeatsStatus(int scheduleId) {
@@ -119,11 +103,21 @@ public class SeatService {
     // -------------------------------
 
     private String generateLockKey(int scheduleId, int seatId) {
-        return String.format("seat:lock:%d:%d", scheduleId, seatId);
+        return new StringBuilder()
+                .append("seat:lock:")
+                .append(scheduleId)
+                .append(":")
+                .append(seatId)
+                .toString();
     }
 
     private String generateSeatKey(int scheduleId, int seatId) {
-        return String.format("seat:%d:%d", scheduleId, seatId);
+        return new StringBuilder()
+                .append("seat:")
+                .append(scheduleId)
+                .append(":")
+                .append(seatId)
+                .toString();
     }
 
     private List<SeatDto> convertToSeatDtos(List<Seat> seats) {
@@ -137,7 +131,7 @@ public class SeatService {
     }
 
     private List<Integer> fetchAvailableSeatsFromRedis(int scheduleId, int numSeats) {
-        logger.debug("[DEBUG] Redis에서 AVAILABLE 상태 좌석 조회 시작. scheduleId={}, 요청 좌석 수={}", scheduleId, numSeats);
+        logger.debug("Redis에서 AVAILABLE 상태 좌석 조회 시작. scheduleId={}, 요청 좌석 수={}", scheduleId, numSeats);
 
         String pattern = "seat:" + scheduleId + ":*";
         Set<String> keys = redisRepository.scanKeys(pattern);
@@ -154,7 +148,7 @@ public class SeatService {
             }
         }
 
-        logger.debug("[DEBUG] Redis에서 조회된 AVAILABLE 좌석: {}", availableSeats);
+        logger.debug(" Redis에서 조회된 AVAILABLE 좌석: {}", availableSeats);
         return availableSeats;
     }
 

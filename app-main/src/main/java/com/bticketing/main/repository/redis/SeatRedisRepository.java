@@ -64,10 +64,22 @@ public class SeatRedisRepository {
         return acquireLockAsync(lockKey, "LOCKED", ttlInSeconds)
                 .thenCompose(acquired -> {
                     if (!acquired) {
+                        // 락을 못 잡으면 에러를 반환
                         return CompletableFuture.failedFuture(new RuntimeException("다른 작업이 진행 중입니다. 잠시 후 다시 시도해주세요."));
                     }
+                    // 락을 잡았으면 작업을 실행
                     return action.get()
-                            .whenComplete((result, ex) -> releaseLockAsync(lockKey)); // 작업 완료 후 락 해제 (성공/실패 모두)
+                            .handle((result, ex) -> {
+                                // 작업이 끝나면 락 해제
+                                releaseLockAsync(lockKey);
+
+                                // 에러가 발생하면 다시 던져준다
+                                if (ex != null) {
+                                    throw new RuntimeException(ex);
+                                }
+                                // 작업 결과 반환
+                                return result;
+                            });
                 });
     }
 

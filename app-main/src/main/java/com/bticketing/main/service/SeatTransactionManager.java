@@ -33,6 +33,7 @@ public class SeatTransactionManager {
         this.redisRepository = redisRepository;
     }
 
+    //Redis와DB의 좌석 상태의 상태를 동시에 업데이트
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void updateSeatStatuses(int scheduleId, List<Seat> seats, String status) {
         for (Seat seat : seats) {
@@ -50,6 +51,7 @@ public class SeatTransactionManager {
         }
     }
 
+    //DB와 Redis의 좌석 상태를 동기화
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public String fetchAndSyncSeatStatus(int scheduleId, int seatId) {
         Optional<SeatReservation> dbReservation = seatReservationRepository.findBySeatAndSchedule(seatId, scheduleId);
@@ -73,6 +75,7 @@ public class SeatTransactionManager {
         }
     }
 
+    //요청한 좌석 수만큼 새 좌석을 생성하고 예약
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public List<Seat> createNewSeatReservations(int scheduleId, int numSeats) {
         logger.debug("[DEBUG] Seat 테이블에서 새 좌석 예약 생성 시작. scheduleId={}, 요청 좌석 수={}", scheduleId, numSeats);
@@ -104,7 +107,7 @@ public class SeatTransactionManager {
         return newReservations;
     }
 
-
+    //연속된 좌석을 할당
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public List<SeatDto> findAndAssignAvailableSeats(int scheduleId, int numSeats) {
         List<Seat> dbSeats = fetchAvailableSeatsFromDB(scheduleId);
