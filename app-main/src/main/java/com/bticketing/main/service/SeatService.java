@@ -83,6 +83,7 @@ public class SeatService {
             List<Integer> redisSeatIds = fetchAvailableSeatsFromRedis(scheduleId, numSeats);
             List<Seat> redisSeats = convertSeatIdsToSeats(redisSeatIds);
 
+            //주기적인 동기화 작업 검토
             List<Seat> assignedSeats = findConsecutiveSeatsInSameRow(redisSeats, numSeats);
             if (assignedSeats.size() == numSeats) {
                 logger.debug("Redis에서 요청 좌석 확보 완료: {}", assignedSeats);
@@ -103,21 +104,11 @@ public class SeatService {
     // -------------------------------
 
     private String generateLockKey(int scheduleId, int seatId) {
-        return new StringBuilder()
-                .append("seat:lock:")
-                .append(scheduleId)
-                .append(":")
-                .append(seatId)
-                .toString();
+        return String.format("seat:%d:%d", scheduleId, seatId);
     }
 
     private String generateSeatKey(int scheduleId, int seatId) {
-        return new StringBuilder()
-                .append("seat:")
-                .append(scheduleId)
-                .append(":")
-                .append(seatId)
-                .toString();
+        return String.format("seat:%d:%d", scheduleId, seatId);
     }
 
     private List<SeatDto> convertToSeatDtos(List<Seat> seats) {

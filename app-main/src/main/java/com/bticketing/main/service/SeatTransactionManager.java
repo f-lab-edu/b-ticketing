@@ -52,6 +52,7 @@ public class SeatTransactionManager {
     }
 
     //DB와 Redis의 좌석 상태를 동기화
+    //트랜잭션의 실패를 대비한 재시도 로직 추가 검토
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public String fetchAndSyncSeatStatus(int scheduleId, int seatId) {
         Optional<SeatReservation> dbReservation = seatReservationRepository.findBySeatAndSchedule(seatId, scheduleId);
@@ -78,7 +79,7 @@ public class SeatTransactionManager {
     //요청한 좌석 수만큼 새 좌석을 생성하고 예약
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public List<Seat> createNewSeatReservations(int scheduleId, int numSeats) {
-        logger.debug("[DEBUG] Seat 테이블에서 새 좌석 예약 생성 시작. scheduleId={}, 요청 좌석 수={}", scheduleId, numSeats);
+        logger.debug(" Seat 테이블에서 새 좌석 예약 생성 시작. scheduleId={}, 요청 좌석 수={}", scheduleId, numSeats);
 
         List<Seat> allSeats = seatRepository.findAll();
         Set<Integer> reservedSeatIds = seatReservationRepository.findByScheduleId(scheduleId)
@@ -114,7 +115,7 @@ public class SeatTransactionManager {
         List<Seat> assignedSeats = findConsecutiveSeatsInSameRow(dbSeats, numSeats);
 
         if (assignedSeats.size() == numSeats) {
-            logger.debug("[DEBUG] DB에서 요청 좌석 확보 완료: {}", assignedSeats);
+            logger.debug("DB에서 요청 좌석 확보 완료: {}", assignedSeats);
             updateSeatStatuses(scheduleId, assignedSeats, "RESERVED");
             return convertToSeatDtos(assignedSeats);
         }
@@ -124,13 +125,13 @@ public class SeatTransactionManager {
             throw new SeatAllReservedException("요청한 좌석 수를 자동 배정할 수 없습니다.");
         }
 
-        logger.debug("[DEBUG] 새 좌석 예약 완료: {}", newSeats);
+        logger.debug(" 새 좌석 예약 완료: {}", newSeats);
         updateSeatStatuses(scheduleId, newSeats, "RESERVED");
         return convertToSeatDtos(newSeats);
     }
 
     private List<Seat> fetchAvailableSeatsFromDB(int scheduleId) {
-        logger.debug("[DEBUG] DB에서 사용 가능한 좌석 조회 시작. scheduleId={}", scheduleId);
+        logger.debug("DB에서 사용 가능한 좌석 조회 시작. scheduleId={}", scheduleId);
 
         List<SeatReservation> reservations = seatReservationRepository.findAvailableSeats(scheduleId);
         return reservations.stream()
