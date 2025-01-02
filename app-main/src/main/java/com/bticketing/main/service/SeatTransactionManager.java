@@ -52,7 +52,7 @@ public class SeatTransactionManager {
     }
 
     //DB와 Redis의 좌석 상태를 동기화
-    //트랜잭션의 실패를 대비한 재시도 로직 추가 검토
+    //[확인사항] 트랜잭션의 실패를 대비한 재시도 로직 추가 검토
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public String fetchAndSyncSeatStatus(int scheduleId, int seatId) {
         Optional<SeatReservation> dbReservation = seatReservationRepository.findBySeatAndSchedule(seatId, scheduleId);
