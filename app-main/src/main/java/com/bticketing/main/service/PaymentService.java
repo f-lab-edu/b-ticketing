@@ -1,6 +1,7 @@
 package com.bticketing.main.service;
 
 import com.bticketing.main.entity.Payment;
+import com.bticketing.main.kafka.producer.PaymentEventProducer;
 import com.bticketing.main.repository.payment.PaymentRepository;
 import com.bticketing.main.repository.redis.SeatRedisRepository;
 import com.bticketing.main.repository.seat.SeatReservationRepository;
@@ -20,13 +21,16 @@ public class PaymentService {
     private final PaymentRepository paymentRepository;
     private final SeatReservationRepository seatReservationRepository;
     private final SeatRedisRepository redisRepository;
+    private final PaymentEventProducer eventProducer;
 
     public PaymentService(PaymentRepository paymentRepository,
                           SeatReservationRepository seatReservationRepository,
-                          SeatRedisRepository redisRepository) {
+                          SeatRedisRepository redisRepository,
+                          PaymentEventProducer eventProducer) {
         this.paymentRepository = paymentRepository;
         this.seatReservationRepository = seatReservationRepository;
         this.redisRepository = redisRepository;
+        this.eventProducer = eventProducer;
     }
 
     @Transactional
@@ -37,6 +41,10 @@ public class PaymentService {
         try {
             updatePaymentStatus(savedPayment, "COMPLETED");
             updateSeatStatus(reservationId, "COMPLETE");
+
+            //kafka 이벤트 전송
+            sendPaymentCompletedEvent(reservationId,amount);
+
         } catch (Exception e) {
             updatePaymentStatus(savedPayment, "FAILED");
             revertSeatStatusToAvailable(reservationId);
@@ -52,6 +60,7 @@ public class PaymentService {
         updateSeatStatus(reservationId, "AVAILABLE");
         paymentRepository.findById(reservationId).ifPresent(payment -> {
             updatePaymentStatus(payment, "CANCELED");
+            sendPaymentCancelledEvent(reservationId);
         });
 
     }
@@ -85,6 +94,16 @@ public class PaymentService {
         payment.setAmount(amount);
         payment.setPaymentDate(LocalDateTime.now());
         return payment;
+    }
+
+    private void sendPaymentCompletedEvent(int reservationId, double amount) {
+        String message = String.format("결제 완료: ReservationId=%d, Amount=%.2f", reservationId, amount);
+        eventProducer.sendPaymentCompletedEvent(message);
+    }
+
+    private void sendPaymentCancelledEvent(int reservationId){
+        String message = String.format("Payment cancelled: ReservationId=%d", reservationId);
+        eventProducer.sendPaymentCompletedEvent(message);
     }
 }
 
