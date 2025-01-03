@@ -6,6 +6,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 @RestController
 @RequestMapping("/seats")
@@ -18,22 +19,25 @@ public class SeatSelectionController {
     }
 
     @PostMapping("/select")
-    public ResponseEntity<SeatDto> selectSeat(@RequestParam int scheduleId, @RequestParam int seatId) {
-        SeatDto reservedSeat = seatService.selectSeat(scheduleId, seatId);
-        return ResponseEntity.ok(reservedSeat);
+    public CompletableFuture<ResponseEntity<SeatDto>> selectSeat(@RequestParam int scheduleId, @RequestParam int seatId) {
+        // 단순히 서비스 호출 결과를 반환
+        return seatService.selectSeat(scheduleId, seatId)
+                .thenApply(ResponseEntity::ok);
     }
 
     @PostMapping("/auto-assign")
-    public ResponseEntity<List<SeatDto>> autoAssignSeats(
+    public CompletableFuture<ResponseEntity<List<SeatDto>>> autoAssignSeats(
             @RequestParam int scheduleId,
             @RequestParam int numSeats) {
-        List<SeatDto> assignedSeats = seatService.autoAssignSeats(scheduleId, numSeats);
-        return ResponseEntity.ok(assignedSeats);
+        // 단순히 서비스 호출 결과를 반환
+        return seatService.autoAssignSeats(scheduleId, numSeats)
+                .thenApply(ResponseEntity::ok);
     }
 
     @GetMapping("/status")
-    public ResponseEntity<List<SeatDto>> getSeatsStatus(@RequestParam int scheduleId) {
-        List<SeatDto> seatStatuses = seatService.getSeatsStatus(scheduleId);
-        return ResponseEntity.ok(seatStatuses);
+    public CompletableFuture<ResponseEntity<List<SeatDto>>> getSeatsStatus(@RequestParam int scheduleId) {
+        // 단순히 서비스 호출 결과를 반환
+        return seatService.getSeatsStatus(scheduleId)
+                .thenApply(ResponseEntity::ok);
     }
 }

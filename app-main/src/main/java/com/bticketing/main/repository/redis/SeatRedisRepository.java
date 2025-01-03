@@ -1,11 +1,17 @@
 package com.bticketing.main.repository.redis;
+import com.bticketing.main.service.SeatService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.data.redis.connection.RedisConnection;
+import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.stereotype.Repository;
 
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
-import java.util.stream.Collectors;
 
 @Repository
 public class SeatRedisRepository {
@@ -15,7 +21,6 @@ public class SeatRedisRepository {
     public SeatRedisRepository(RedisTemplate<String, Object> redisTemplate) {
         this.redisTemplate = redisTemplate;
     }
-
 
     public boolean acquireLock(String key, String value, long ttlInSeconds) {
         // Redis의 SETNX 명령과 EXPIRE를 결합한 동작을 수행
@@ -41,18 +46,41 @@ public class SeatRedisRepository {
         redisTemplate.opsForValue().set(key, value, ttlInSeconds, TimeUnit.SECONDS);
     }
 
+    // 비동기 락 획득
+    public CompletableFuture<Boolean> acquireLockAsync(String key, String value, long ttlInSeconds) {
+        return CompletableFuture.supplyAsync(() -> {
+            Boolean success = redisTemplate.opsForValue().setIfAbsent(key, value, ttlInSeconds, TimeUnit.SECONDS);
+            return Boolean.TRUE.equals(success);
+        });
+    }
 
-    public <T> T executeWithLock(String lockKey, long ttlInSeconds, Supplier<T> action) {
-        boolean lockAcquired = acquireLock(lockKey, "LOCKED", ttlInSeconds);
-        if (!lockAcquired) {
-            throw new RuntimeException("다른 작업이 진행 중입니다. 잠시 후 다시 시도해주세요.");
-        }
+    // 비동기 락 해제
+    public CompletableFuture<Void> releaseLockAsync(String key) {
+        return CompletableFuture.runAsync(() -> redisTemplate.delete(key));
+    }
 
-        try {
-            return action.get(); // 람다로 전달받은 작업 실행
-        } finally {
-            releaseLock(lockKey); // 작업 후 락 해제
-        }
+    // 비동기 락 획득 및 작업 실행
+    public <T> CompletableFuture<T> executeWithLockAsync(String lockKey, long ttlInSeconds, Supplier<CompletableFuture<T>> action) {
+        return acquireLockAsync(lockKey, "LOCKED", ttlInSeconds)
+                .thenCompose(acquired -> {
+                    if (!acquired) {
+                        // 락을 못 잡으면 에러를 반환
+                        return CompletableFuture.failedFuture(new RuntimeException("다른 작업이 진행 중입니다. 잠시 후 다시 시도해주세요."));
+                    }
+                    // 락을 잡았으면 작업을 실행
+                    return action.get()
+                            .handle((result, ex) -> {
+                                // 작업이 끝나면 락 해제
+                                releaseLockAsync(lockKey);
+
+                                // 에러가 발생하면 다시 던져준다
+                                if (ex != null) {
+                                    throw new RuntimeException(ex);
+                                }
+                                // 작업 결과 반환
+                                return result;
+                            });
+                });
     }
 
     public Map<String, String> getAllReservedSeats(int scheduleId) {
@@ -71,6 +99,46 @@ public class SeatRedisRepository {
         }
         return result;
     }
+
+    public List<Integer> getAvailableSeatIds(int scheduleId) {
+        String keyPattern = "seat:" + scheduleId + ":*";
+        Set<String> keys = redisTemplate.keys(keyPattern); // 패턴으로 Redis에서 키 조회
+        List<Integer> availableSeats = new ArrayList<>();
+
+        if (keys != null) {
+            for (String key : keys) {
+                String status = (String) redisTemplate.opsForValue().get(key); // 상태 조회
+                if ("AVAILABLE".equals(status)) {
+                    String seatId = key.split(":")[2]; // 키에서 seatId 추출
+                    availableSeats.add(Integer.parseInt(seatId));
+                }
+            }
+        }
+        return availableSeats;
+    }
+
+    public void clear() {
+        redisTemplate.getConnectionFactory().getConnection().flushDb();
+    }
+
+    // Redis에 상태 저장
+    public void setSeatStatus(String key, String status) {
+        redisTemplate.opsForValue().set(key, status);
+    }
+
+    public Set<String> scanKeys(String pattern) {
+        return redisTemplate.execute((RedisConnection connection) -> {
+            Set<String> keys = new HashSet<>();
+            Cursor<byte[]> cursor = connection.scan(ScanOptions.scanOptions().match(pattern).count(100).build());
+
+            while (cursor.hasNext()) {
+                keys.add(new String(cursor.next()));
+            }
+            return keys;
+        });
+    }
+
+
 
 
 }
