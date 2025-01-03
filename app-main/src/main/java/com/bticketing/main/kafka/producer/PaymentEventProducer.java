@@ -7,7 +7,9 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class PaymentEventProducer {
+
     private static final Logger logger = LoggerFactory.getLogger(PaymentEventProducer.class);
+    private static final String PAYMENT_REQUESTED_TOPIC = "payment-requested";
     private static final String PAYMENT_COMPLETED_TOPIC = "payment-completed";
 
     private final KafkaTemplate<String, String> kafkaTemplate;
@@ -16,8 +18,11 @@ public class PaymentEventProducer {
         this.kafkaTemplate = kafkaTemplate;
     }
 
+    public void sendPaymentRequestedEvent(String message) {
+        kafkaTemplate.send(PAYMENT_REQUESTED_TOPIC, message);
+    }
+
     public void sendPaymentCompletedEvent(String message) {
-        logger.info("Producing payment completed event to topic: {}", PAYMENT_COMPLETED_TOPIC);
         kafkaTemplate.send(PAYMENT_COMPLETED_TOPIC, message);
     }
 }

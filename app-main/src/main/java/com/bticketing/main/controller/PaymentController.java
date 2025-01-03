@@ -1,12 +1,12 @@
 package com.bticketing.main.controller;
 
+import com.bticketing.main.dto.PaymentRequestDto;
 import com.bticketing.main.entity.Payment;
 import com.bticketing.main.service.PaymentService;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/payments")
@@ -18,18 +18,22 @@ public class PaymentController {
         this.paymentService = paymentService;
     }
 
-    @PostMapping("/process")
-    public ResponseEntity<Payment> processPayment(
-            @RequestParam int reservationId,
-            @RequestParam double amount) {
-        Payment payment = paymentService.processPayment(reservationId, amount);
-        return ResponseEntity.ok(payment);
+    @PostMapping
+    public ResponseEntity<String> requestPayment(@RequestBody PaymentRequestDto requestDto) {
+        String requestId = UUID.randomUUID().toString();
+        paymentService.processPaymentAsync(requestId, requestDto.getReservationId(), requestDto.getAmount());
+        return ResponseEntity.ok(requestId);
     }
 
-    @PostMapping("/cancel")
-    public ResponseEntity<String> cancelPayment(@RequestParam int reservationId) {
-        paymentService.cancelPayment(reservationId);
-        return ResponseEntity.ok("결제가 취소되었습니다.");
+    @GetMapping("/{requestId}/status")
+    public ResponseEntity<String> getPaymentStatus(@PathVariable String requestId) {
+        String status = paymentService.getPaymentStatus(requestId);
+        return ResponseEntity.ok(status);
     }
 
+    @GetMapping("/{requestId}/message")
+    public ResponseEntity<String> getPaymentMessage(@PathVariable String requestId) {
+        String message = paymentService.getPaymentMessage(requestId);
+        return ResponseEntity.ok(message);
+    }
 }
