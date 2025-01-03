@@ -53,7 +53,7 @@ public class SeatService {
                 })
                 .thenApply(status -> {
                     // 상태가 "RESERVED"인 경우 예외 발생
-                    if ("RESERVED".equals(status)) {
+                    if ("RESERVED".equals(status)|| "COMPLETE".equals(status)) {
                         throw new SeatAlreadyReservedException("이미 예약된 좌석입니다.");
                     }
                     return status; // "AVAILABLE" 등의 상태
@@ -64,7 +64,7 @@ public class SeatService {
                     return redisRepository.executeWithLockAsync(lockKey, SEAT_RESERVATION_TTL, () ->
                             CompletableFuture.supplyAsync(() -> {
                                 String currentStatus = redisRepository.getSeatStatus(seatKey);
-                                if ("RESERVED".equals(currentStatus)) {
+                                if ("RESERVED".equals(currentStatus)|| "COMPLETE".equals(currentStatus)) {
                                     throw new SeatAlreadyReservedException("이미 예약된 좌석입니다.");
                                 }
                                 Seat seat = seatRepository.findById(seatId)
