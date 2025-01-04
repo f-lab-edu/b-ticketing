@@ -3,6 +3,7 @@ package com.bticketing.main.service;
 import com.bticketing.main.entity.Payment;
 import com.bticketing.main.kafka.producer.PaymentEventProducer;
 import com.bticketing.main.repository.payment.PaymentRepository;
+import com.bticketing.main.repository.redis.PaymentRedisRepository;
 import com.bticketing.main.repository.redis.SeatRedisRepository;
 import com.bticketing.main.repository.seat.SeatReservationRepository;
 import jakarta.transaction.Transactional;
@@ -22,32 +23,32 @@ public class PaymentService {
     private final SeatReservationRepository seatReservationRepository;
     private final SeatRedisRepository redisRepository;
     private final PaymentEventProducer eventProducer;
-    private final RedisTemplate<String, String> redisTemplate;
-
-    private static final String STATUS_KEY_PREFIX = "payment:status:";
-    private static final String MESSAGE_KEY_PREFIX = "payment:message:";
+    private final PaymentRedisRepository paymentRedisRepository;
 
     public PaymentService(PaymentRepository paymentRepository,
                           SeatReservationRepository seatReservationRepository,
                           SeatRedisRepository redisRepository,
                           PaymentEventProducer eventProducer,
-                          RedisTemplate<String, String> redisTemplate) {
+                          PaymentRedisRepository paymentRedisRepository) {
         this.paymentRepository = paymentRepository;
         this.seatReservationRepository = seatReservationRepository;
         this.redisRepository = redisRepository;
         this.eventProducer = eventProducer;
-        this.redisTemplate = redisTemplate;
+        this.paymentRedisRepository = paymentRedisRepository;
     }
 
     public void processPaymentAsync(String requestId, int reservationId, double amount) {
-        // 초기 상태 저장
-        redisTemplate.opsForValue().set(STATUS_KEY_PREFIX + requestId, "PENDING");
-        redisTemplate.opsForValue().set(MESSAGE_KEY_PREFIX + requestId, "결제 요청 중...");
+        // Redis 초기 상태 저장
+        paymentRedisRepository.savePaymentStatus(requestId, "PENDING");
+        paymentRedisRepository.savePaymentMessage(requestId, "결제 요청 중...");
+
+        logger.info("Saved initial payment status to Redis: requestId={}, status=PENDING", requestId);
 
         // Kafka 이벤트 발행
         String message = String.format("requestId=%s,reservationId=%d,amount=%.2f", requestId, reservationId, amount);
         eventProducer.sendPaymentRequestedEvent(message);
     }
+
 
     @Transactional
     public Payment processPayment(String requestId, int reservationId, double amount) {
@@ -58,21 +59,29 @@ public class PaymentService {
             updatePaymentStatus(savedPayment, "COMPLETED");
             updateSeatStatus(reservationId, "COMPLETE");
 
-            // Kafka 완료 이벤트 발행
-            String completionMessage = String.format("requestId=%s, Payment completed for reservationId=%d", requestId, reservationId);
-            redisTemplate.opsForValue().set(STATUS_KEY_PREFIX + requestId, "COMPLETED");
-            redisTemplate.opsForValue().set(MESSAGE_KEY_PREFIX + requestId, completionMessage);
+            // Redis 상태 및 메시지 업데이트
+            String completionMessage = String.format("결제 완료: ReservationId=%d, 금액=%.2f", reservationId, amount);
+            paymentRedisRepository.savePaymentStatus(requestId, "COMPLETED");
+            paymentRedisRepository.savePaymentMessage(requestId, completionMessage);
 
         } catch (Exception e) {
             updatePaymentStatus(savedPayment, "FAILED");
             revertSeatStatusToAvailable(reservationId);
 
-            redisTemplate.opsForValue().set(STATUS_KEY_PREFIX + requestId, "FAILED");
-            redisTemplate.opsForValue().set(MESSAGE_KEY_PREFIX + requestId, "결제 실패: " + e.getMessage());
+            paymentRedisRepository.savePaymentStatus(requestId, "FAILED");
+            paymentRedisRepository.savePaymentMessage(requestId, "결제 실패: " + e.getMessage());
 
             throw new RuntimeException("결제 처리 중 오류가 발생했습니다.");
         }
         return savedPayment;
+    }
+
+    public String getPaymentStatus(String requestId) {
+        return paymentRedisRepository.getPaymentStatus(requestId);
+    }
+
+    public String getPaymentMessage(String requestId) {
+        return paymentRedisRepository.getPaymentMessage(requestId);
     }
 
     private void updatePaymentStatus(Payment payment, String status) {
@@ -104,12 +113,6 @@ public class PaymentService {
         return payment;
     }
 
-    public String getPaymentStatus(String requestId) {
-        return redisTemplate.opsForValue().get(STATUS_KEY_PREFIX + requestId);
-    }
 
-    public String getPaymentMessage(String requestId) {
-        return redisTemplate.opsForValue().get(MESSAGE_KEY_PREFIX + requestId);
-    }
 
 }

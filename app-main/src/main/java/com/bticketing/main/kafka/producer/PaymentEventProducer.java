@@ -19,10 +19,20 @@ public class PaymentEventProducer {
     }
 
     public void sendPaymentRequestedEvent(String message) {
-        kafkaTemplate.send(PAYMENT_REQUESTED_TOPIC, message);
+        kafkaTemplate.send(PAYMENT_REQUESTED_TOPIC, message)
+                .thenAccept(result -> logger.info("Message sent successfully: {}", message))
+                .exceptionally(ex -> {
+                    logger.error("Failed to send message: {}", message, ex);
+                    return null;
+                });
     }
 
     public void sendPaymentCompletedEvent(String message) {
-        kafkaTemplate.send(PAYMENT_COMPLETED_TOPIC, message);
+        kafkaTemplate.send(PAYMENT_COMPLETED_TOPIC, message)
+                .thenAccept(result -> logger.info("Message sent successfully: {}", message))
+                .exceptionally(ex -> {
+                    logger.error("Failed to send message: {}", message, ex);
+                    return null;
+                });
     }
 }

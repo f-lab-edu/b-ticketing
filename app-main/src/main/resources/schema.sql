@@ -11,3 +11,11 @@ CREATE TABLE IF NOT EXISTS seat_reservation (
                                                 status VARCHAR(20) NOT NULL,
     FOREIGN KEY (seat_id) REFERENCES seat(seat_id)
     );
+
+CREATE TABLE IF NOT EXISTS payment (
+                         payment_id INT AUTO_INCREMENT PRIMARY KEY,
+                         reservation_id INT NOT NULL,
+                         payment_status VARCHAR(255) NOT NULL,
+                         amount DOUBLE NOT NULL,
+                         payment_date DATETIME NOT NULL
+);

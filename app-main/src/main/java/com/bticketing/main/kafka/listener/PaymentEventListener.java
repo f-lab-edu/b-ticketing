@@ -22,15 +22,18 @@ public class PaymentEventListener {
 
     @KafkaListener(topics = "payment-requested", groupId = "payment-service-group")
     public void handlePaymentRequestedEvent(String message) {
+        logger.info("Received message: {}", message);
 
         String[] parts = message.split(",");
         String requestId = parts[0].split("=")[1];
         int reservationId = Integer.parseInt(parts[1].split("=")[1]);
         double amount = Double.parseDouble(parts[2].split("=")[1]);
+
         try {
             Payment payment = paymentService.processPayment(requestId, reservationId, amount);
+            logger.info("Payment processed successfully for requestId={}", requestId);
 
-            // 결제 완료 이벤트 발행
+            //결과 완료 메시지 발행
             String completedMessage = String.format("requestId=%s,reservationId=%d,amount=%.2f,email=user@example.com",
                     requestId, reservationId, amount);
             eventProducer.sendPaymentCompletedEvent(completedMessage);
