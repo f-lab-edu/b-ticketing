@@ -2,7 +2,6 @@ package com.bticketing.main.service;
 
 import com.bticketing.main.dto.SeatDto;
 import com.bticketing.main.entity.Seat;
-import com.bticketing.main.exception.SeatAllReservedException;
 import com.bticketing.main.exception.SeatAlreadyReservedException;
 import com.bticketing.main.repository.redis.SeatRedisRepository;
 import com.bticketing.main.repository.seat.SeatRepository;
@@ -60,7 +59,6 @@ public class SeatService {
                 })
                 .thenCompose(status -> {
                     // 락을 얻어야 하는 부분만 비동기로 처리
-                    //[확인사항] 사용자 TTL알람 방법 추가
                     return redisRepository.executeWithLockAsync(lockKey, SEAT_RESERVATION_TTL, () ->
                             CompletableFuture.supplyAsync(() -> {
                                 String currentStatus = redisRepository.getSeatStatus(seatKey);
@@ -84,7 +82,6 @@ public class SeatService {
             List<Integer> redisSeatIds = fetchAvailableSeatsFromRedis(scheduleId, numSeats);
             List<Seat> redisSeats = convertSeatIdsToSeats(redisSeatIds);
 
-            //[확인사항] 주기적인 동기화 작업 검토
             List<Seat> assignedSeats = findConsecutiveSeatsInSameRow(redisSeats, numSeats);
             if (assignedSeats.size() == numSeats) {
                 logger.debug("Redis에서 요청 좌석 확보 완료: {}", assignedSeats);

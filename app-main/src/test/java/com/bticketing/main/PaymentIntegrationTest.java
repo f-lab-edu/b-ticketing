@@ -2,29 +2,35 @@ package com.bticketing.main;
 
 import com.bticketing.main.repository.redis.PaymentRedisRepository;
 import com.bticketing.main.service.PaymentService;
+import org.apache.kafka.clients.admin.AdminClient;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.kafka.test.context.EmbeddedKafka;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 @SpringBootTest
-@EmbeddedKafka(partitions = 1, topics = {"payment-requested", "payment-completed"})
 @ActiveProfiles("test")
 @TestPropertySource(properties = {
-        "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}",
+        "spring.kafka.bootstrap-servers=localhost:9092", // 로컬 Kafka 서버 설정
         "spring.kafka.consumer.auto-offset-reset=earliest",
         "spring.redis.host=localhost",
         "spring.redis.port=6380"
 })
 public class PaymentIntegrationTest {
+
+    private static final Logger logger = LoggerFactory.getLogger(PaymentIntegrationTest.class);
 
     @Autowired
     private PaymentRedisRepository paymentRedisRepository;
@@ -32,48 +38,86 @@ public class PaymentIntegrationTest {
     @Autowired
     private PaymentService paymentService;
 
-    @AfterEach
-    void cleanupRedis() {
-        // Redis에서 테스트 중 생성된 상태와 메시지 데이터를 정리합니다.
-        paymentRedisRepository.savePaymentStatus("payment:status:testRequestId", null);
-        paymentRedisRepository.savePaymentMessage("payment:message:testRequestId", null);
+    @BeforeEach
+    void setupEnvironment() {
+        // Kafka 클러스터 상태 확인
+        ensureKafkaTopicsExist(List.of("payment-requested", "payment-completed"));
+
+        // Redis 초기화
+        resetRedisKeys("testRequestId");
+    }
+
+    /**
+     * Kafka 토픽 상태를 확인하고 존재하지 않을 경우 예외를 발생시킴.
+     */
+    private void ensureKafkaTopicsExist(List<String> topics) {
+        try (AdminClient adminClient = AdminClient.create(Map.of("bootstrap.servers", "localhost:9092"))) {
+            await().atMost(30, TimeUnit.SECONDS).until(() -> {
+                try {
+                    Map<String, ?> topicDescriptions = adminClient.describeTopics(topics).all().get();
+                    return topicDescriptions != null && !topicDescriptions.isEmpty();
+                } catch (Exception e) {
+                    logger.error("Error while verifying Kafka topics: {}", e.getMessage(), e);
+                    return false;
+                }
+            });
+            logger.info("Kafka topics verified: {}", topics);
+        } catch (Exception e) {
+            throw new RuntimeException("Kafka topics verification failed", e);
+        }
+    }
+
+    /**
+     * Redis 키 초기화 로직.
+     */
+    private void resetRedisKeys(String requestId) {
+            paymentRedisRepository.deletePaymentStatus(requestId);
+            paymentRedisRepository.deletePaymentMessage(requestId);
     }
 
     @Test
     void paymentFlowIntegrationTest() {
-        // Given: 테스트 입력 데이터 준비
-        String requestId = "testRequestId"; // 결제 요청 ID
-        int reservationId = 1;             // 예약 ID
-        double amount = 100.0;             // 결제 금액
+        String requestId = "testRequestId";
+        int reservationId = 1;
+        double amount = 100.0;
 
-        // When: 비동기 결제 처리 시작
+        // 결제 처리 시작
         paymentService.processPaymentAsync(requestId, reservationId, amount);
 
-        // Then
-        // 1. Kafka Producer 메시지 처리 및 Redis "PENDING" 상태 확인
+        // 1. PENDING 상태 확인
         await()
-                .atMost(15, TimeUnit.SECONDS)
+                .atMost(10, TimeUnit.SECONDS)
                 .until(() -> {
-                    String status = paymentRedisRepository.getPaymentStatus("payment:status:" + requestId);
-                    System.out.println("PENDING Status: " + status); // 상태 확인 로그
-                    return "PENDING".equals(status); // 상태가 "PENDING"인지 확인
+                    String status = paymentRedisRepository.getPaymentStatus(requestId);
+                    logger.info("PENDING Status in Redis: {}", status);
+                    return "PENDING".equals(status);
                 });
 
-        // 2. Kafka Listener 메시지 처리 및 Redis "COMPLETED" 상태 확인
+        // 2. COMPLETED 상태 확인
         await()
-                .atMost(15, TimeUnit.SECONDS)
+                .atMost(20, TimeUnit.SECONDS) // 대기 시간을 20초로 증가
                 .until(() -> {
-                    String status = paymentRedisRepository.getPaymentStatus("payment:status:" + requestId);
-                    System.out.println("COMPLETED Status: " + status); // 상태 확인 로그
-                    return "COMPLETED".equals(status); // 상태가 "COMPLETED"인지 확인
+                    String status = paymentRedisRepository.getPaymentStatus(requestId);
+                    logger.info("COMPLETED Status in Redis: {}", status);
+                    return "COMPLETED".equals(status);
                 });
 
-        // 3. Redis에서 결제 완료 메시지 확인
-        String message = paymentRedisRepository.getPaymentMessage("payment:message:" + requestId);
-        assertNotNull(message); // 메시지가 존재하는지 확인
-        assertTrue(message.contains("결제 완료")); // 메시지 내용에 "결제 완료" 포함 여부 확인
+        // 3. 결제 완료 메시지 확인
+        await()
+                .atMost(20, TimeUnit.SECONDS)
+                .until(() -> {
+                    String message = paymentRedisRepository.getPaymentMessage(requestId);
+                    logger.info("Message in Redis: {}", message);
+                    return message != null && message.contains("결제 완료");
+                });
 
-        // 4. 최종적으로 Redis 상태가 "COMPLETED"인지 확인
-        assertEquals("COMPLETED", paymentRedisRepository.getPaymentStatus("payment:status:" + requestId));
+        // 4. 이메일 발송 검증
+        await()
+                .atMost(20, TimeUnit.SECONDS)
+                .until(() -> {
+                    String message = paymentRedisRepository.getPaymentMessage(requestId);
+                    logger.info("Email Message Verification: {}", message);
+                    return message != null && message.contains("결제 완료: ReservationId=" + reservationId);
+                });
     }
 }

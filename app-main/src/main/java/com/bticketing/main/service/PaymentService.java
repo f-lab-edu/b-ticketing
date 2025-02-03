@@ -38,7 +38,6 @@ public class PaymentService {
     }
 
     public void processPaymentAsync(String requestId, int reservationId, double amount) {
-        // Redis 초기 상태 저장
         paymentRedisRepository.savePaymentStatus(requestId, "PENDING");
         paymentRedisRepository.savePaymentMessage(requestId, "결제 요청 중...");
 
@@ -59,7 +58,6 @@ public class PaymentService {
             updatePaymentStatus(savedPayment, "COMPLETED");
             updateSeatStatus(reservationId, "COMPLETE");
 
-            // Redis 상태 및 메시지 업데이트
             String completionMessage = String.format("결제 완료: ReservationId=%d, 금액=%.2f", reservationId, amount);
             paymentRedisRepository.savePaymentStatus(requestId, "COMPLETED");
             paymentRedisRepository.savePaymentMessage(requestId, completionMessage);

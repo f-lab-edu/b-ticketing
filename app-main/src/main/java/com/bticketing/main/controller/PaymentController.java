@@ -25,6 +25,17 @@ public class PaymentController {
         return ResponseEntity.ok(requestId);
     }
 
+    @PostMapping("/{requestId}/complete")
+    public ResponseEntity<String> completePayment(@PathVariable String requestId, int reservationId, double amount) {
+        try {
+            // 실제 결제 완료 처리
+            paymentService.processPayment(requestId, reservationId, amount);
+            return ResponseEntity.ok("결제 완료");
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body("결제 완료 처리 중 오류: " + e.getMessage());
+        }
+    }
+
     @GetMapping("/{requestId}/status")
     public ResponseEntity<String> getPaymentStatus(@PathVariable String requestId) {
         String status = paymentService.getPaymentStatus(requestId);
